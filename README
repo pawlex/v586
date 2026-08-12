@@ -1,5 +1,33 @@
 core_rtl:
-contains the RTL of the core with AXI4 master interface : v586.v 
+contains the RTL of the core with AXI4 master interface.
+
+acu.v, arithbox.v, datacache.v, realign.v, shiftbox.v, synthetic_op.v are
+hand-written behavioral RTL sub-blocks (address calc, ALU, cache array,
+unaligned-access realign, shift/rotate, microcoded ops).
+
+The rest of the core (bus interface, TLBs, instruction decoder, execution
+datapath, microsequencer, and the top-level integration) is delivered as a
+gate-level netlist -- previously a single 74k-line core_rtl/v586.v, now
+split by module for navigability into:
+
+  v586_biu32_axi.v  - AXI4 bus interface unit                (module biu32_axi)
+  v586_dtlb.v       - data TLB                                (module Dtlb)
+  v586_itlb.v       - instruction TLB                         (module Itlb)
+  v586_decode.v     - instruction decoder                     (module deco + helpers)
+  v586_vliw.v       - execution datapath                      (module vliw)
+  v586_cpu.v        - decoder/datapath wrapper                (module cpu)
+  v586_useq.v       - microsequencer                          (module useq)
+  v586_core.v       - integrates TLBs/useq/cpu                (module core)
+  v586_top.v        - top-level AXI4-wrapped core             (module v586)
+
+Instantiation hierarchy: v586 -> { biu32_axi, core -> { Dtlb, Itlb, useq, cpu -> { vliw, deco } } }.
+Each file's own header comment describes its role in more detail. Content
+below each module's port list is a synthesized netlist of the notech_*
+cells (see gate_rtl/) -- this split is purely organizational (verified
+byte-for-byte identical to the original v586.v); no gate-level logic has
+been rewritten. Reconstructing readable behavioral RTL for these blocks
+would require genuine reverse-engineering of the netlist, which is future
+work, not yet done.
 
 soc_rtl:
 contains peripherals for soc demo, mainly interrupt/timers/uart and spi interface
