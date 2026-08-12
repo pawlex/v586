@@ -222,22 +222,40 @@ Summary of where this stands (full detail and running log of evidence in
   hypothesis needs a non-looping program (e.g. a long straight-line NOP
   sled with the marker instructions at the very end) so a long run
   actually reaches new, previously-unscanned bytes.
+- **Non-looping test written (`sim/rom/boot.asm` rewritten) and run for
+  2,000,000 cycles -- still zero retirement, closing off the closed-loop
+  confound entirely.** The old `boot.asm` looped `trap_0xFFC00` <->
+  `reset_vector_0xFFFF0`; the new one marks the confirmed real reset
+  vector (`0xFFC00`) with a start marker, then far-jumps *once* to ROM
+  base (`0xE0000` -- chosen because `0xFFC00` alone only has ~1KiB of
+  forward room before the ROM/1MB ceiling, see `sim/README.md`'s
+  wraparound gap) and walks a straight-line, non-repeating NOP sled
+  through ~126KiB of previously-unfetched ROM (`sled_start` at `0xE0000`
+  to `end_marker` at `0xFFB00`) before parking in a spin loop -- no jumps
+  or repeats anywhere in the sled itself. Result: `m00_AXI` AR beats
+  reached 8,116 over the 2M-cycle run (vs. the old loop's flat 84 --
+  genuine sustained fetch traffic the whole way, not re-scanning one
+  buffered ~1KB region), `dbg_pc_out` advanced monotonically and
+  non-repeatingly through the entire sled and settled at the
+  `end_marker`/spin region (`0xFFB03`-`0xFFB05`) exactly as designed --
+  but RAM writes, IO writes, and `writeio_req` pulses were all still
+  zero, including the 1.3M+ cycles spent parked at the end after the
+  sled finished. A genuinely non-repeating ~126KiB run plus a long dwell
+  at the end still shows no retirement, so this isn't a closed-loop
+  artifact. The open question narrows fully to candidate (b) in the TODO
+  below.
 
 ### TODO / next steps
 
-1. **Figure out why `vliw` never asserts `writeio_req`** (or performs a
-   RAM store) despite correctly parsing both instruction types' lengths.
-   This is now the central open question -- everything downstream
-   (`biu32_axi`, `core`, renaming) has been ruled out, and "just run the
-   current loop longer" has been tried (2M cycles, no change -- see
-   above) and doesn't apply since the current test program is a closed
-   loop. Better next candidates: (a) write a non-looping test program
-   (straight-line NOP sled, markers at the end) and run that long, to
-   properly test whether retirement lags prefetch by more than a few
-   instructions' worth; or (b) find `vliw`'s actual decode-to-execute
-   dispatch signals (what triggers a micro-op to actually run, as
-   opposed to just being scanned for length) and trace those directly
-   instead of inferring from `pc_out`/bus activity.
+1. **Find `vliw`'s actual decode-to-execute dispatch signals** (what
+   triggers a micro-op to actually run, as opposed to just being scanned
+   for length) and trace those directly instead of inferring from
+   `pc_out`/bus activity. This is now the central open question --
+   everything downstream (`biu32_axi`, `core`, renaming) has been ruled
+   out, and both "just run the current loop longer" (2M cycles, no
+   change) and "maybe it's a closed-loop artifact" (non-looping
+   ~126KiB sled, 2M cycles, still no change -- see above) have been
+   tried and ruled out.
 2. **Trace `deco`'s `in128` input** (the 128-bit instruction window it
    decodes from, sourced from `useq.squeue`) alongside `dbg_pc_out`, to
    get ground truth on what bytes the decoder actually has at a given
@@ -249,9 +267,3 @@ Summary of where this stands (full detail and running log of evidence in
    out when/whether `purge` actually completes. Lower priority given the
    evidence it may not be on the critical path for the execution-pointer
    question, but still an open thread.
-4. **Write a non-looping test program** for the long-run test in (1):
-   `axi_sim_mem.v` still has no 20-bit real-mode wraparound (see
-   `sim/README.md`'s "Known limitations"), so a straight-line NOP sled
-   walking forward will hit unmapped space past `0xFFFFF` rather than
-   wrapping to `0x00000` -- either keep it within one ~128KiB ROM's
-   worth of NOPs, or extend `axi_sim_mem.v` with real wraparound first.

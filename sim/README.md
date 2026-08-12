@@ -31,8 +31,9 @@ there's no real peripheral behind it.
 flat 32-bit here, but real 8086/286-class real-mode hardware wraps at
 the 1MB boundary (`0xFFFFF + 1 -> 0x00000`). The fetch-bus address has
 been observed climbing steadily past `0x100000` into unmapped space
-without wrapping. `rom/boot.hex` works around this with a boundary-guard
-jump rather than fixing it in the memory model (see below).
+without wrapping. `rom/boot.asm` works around this by keeping all of
+its code within the mapped ROM window (`0xE0000`-`0xFFFFF`) rather than
+fixing it in the memory model (see below).
 
 ## Building and running
 
@@ -140,44 +141,51 @@ line gives the full dotted path, e.g.
 ## Boot image (`rom/boot.hex`)
 
 The ROM default-fills as a flat NOP (`0x90`) sled across the whole
-128KiB window (see `axi_sim_mem.v`'s init loop), so any entry point just
-falls through harmlessly. `rom/boot.hex` overrides specific bytes via
-`$readmemh`'s `@offset` directives (offsets are ROM-relative, i.e.
-`physical_address - 0xE0000`):
+128KiB window (see `axi_sim_mem.v`'s init loop). `rom/boot.asm` is
+NASM-assembled (`rom/Makefile`) into a full 128KiB flat binary that
+overrides the whole image -- see the header comment in `rom/boot.asm`
+for the current layout in detail, but in short:
 
 ```
-0xFFBFE-0xFFBFF:  EB 06               JMP +6 (skip the trap below)
-0xFFC00-0xFFC05:  66 E9 FA 03 E0 00   JMP near 0x00F00000 (32-bit rel32, disambiguation trap)
-0xFFFFC-0xFFFFE:  E9 7E FF            JMP $-127 (boundary guard, near ROM's end)
+0xFFC00 : trap_0xFFC00  -- confirmed real hardware reset vector; start
+                           marker, then a one-time far jump (0xEA) to
+                           sled_start
+0xE0000 : sled_start    -- landing marker, then a straight-line,
+                           non-repeating NOP sled
+0xFFB00 : end_marker    -- reached once the whole sled has been walked;
+                           fires a marker, then parks in a spin loop
 ```
 
-See `core_rtl/README.md`'s investigation log for what the disambiguation
-trap is for and what it's shown so far (short version: the jump didn't
-land where intended, meaning the `0x66` operand-size-prefix assumption
-is probably wrong -- unresolved). The boundary guard exists purely so a
-long run doesn't walk the fetch/PC pointer off the mapped ROM into
-unmapped space (see the wraparound gap above).
+This replaced an earlier version that far-jumped `trap_0xFFC00` back to
+a classic-reset-vector section at `0xFFFF0`, forming a closed
+8-instruction loop -- see `core_rtl/README.md`'s investigation log for
+why that couldn't rule out "retirement lags prefetch" (a closed loop
+can't explore new bytes no matter how long it runs) and what the
+non-looping replacement above has shown so far. `sled_start` lands at
+ROM base rather than continuing forward from `0xFFC00` because the
+reset vector alone only has ~1KiB of forward room before the ROM/1MB
+ceiling (see the wraparound gap above); landing at `0xE0000` instead
+gives the sled the full ~126KiB down to `end_marker` to walk, all still
+inside mapped ROM.
 
 ### Adding your own test code
 
-There's no assembler in this workflow -- bytes were hand-encoded with
-one-off Python snippets, e.g. for a relative jump:
+Edit `rom/boot.asm` (NASM syntax, `org 0xE0000` matching ROM base) and
+run `make -C rom` (or just `make run` from `sim/`, which rebuilds
+`boot.hex` automatically via `make`'s dependency tracking) -- no more
+hand-encoding bytes. `rom/Makefile` assembles it with `nasm -f bin` into
+a flat 128KiB `boot.bin`, then converts that to a `$readmemh`-compatible
+one-byte-per-line `boot.hex` via `od`/`tr`/`grep` (not `xxd`, which
+isn't installed on every machine this has been developed on).
 
-```python
-addr = 0xFFFFC       # address of the JMP instruction
-instr_len = 3         # E9 + 2-byte rel16
-target = addr - 127
-rel16 = (target - (addr + instr_len)) & 0xFFFF
-print(' '.join(f'{b:02X}' for b in rel16.to_bytes(2, 'little')))
-```
-
-Same idea for `rel8` (`EB <disp8>`, range -128..+127 relative to the
-address *after* the 2-byte instruction) or `rel32` (`E9 <disp32>`, or
-`66 E9 <disp32>` for the 32-bit-operand-size form we've been assuming --
-unconfirmed whether this core actually decodes that prefix correctly,
-see the disambiguation-trap finding above). Add the bytes to
-`rom/boot.hex` with an `@<rom_offset_hex>` directive (comments with `//`
-or `/* */` are fine in `$readmemh` files), rebuild, and run.
+Far jumps (`0xEA`, `JMP ptr16:16`) are the confirmed-reliable way to
+redirect execution -- see `core_rtl/README.md`'s major finding that the
+fetch address is a raw `{CS,IP}` concatenation, not real-mode segment
+math, so `jmp segment:label` in NASM (which just truncates the label to
+its low 16 bits for the offset field) lines up with actual hardware
+behavior here. A `0x66`-prefixed 32-bit near jump was tried once and
+did not land where intended (see the disambiguation-trap finding) --
+prefer `0xEA` far jumps for new traps/tests.
 
 ### Adding a new debug trace point
 

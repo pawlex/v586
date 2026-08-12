@@ -11,12 +11,13 @@ $(OUTPUT): $(SRC)
 	$(NASM) $(FLAGS) $(SRC) -o $(OUTPUT)
 
 # Generates a $readmemh-compatible hex file: one byte (two hex chars) per
-# line. Plain `xxd -p` packs ~30 bytes per line with no separators, which
-# $readmemh parses as one giant multi-byte value per line instead of one
-# byte per line -- `tr -d '\n' | fold -w2` flattens that and re-splits it
-# cleanly on byte boundaries regardless of xxd's line width.
+# line. Uses `od` (POSIX, unlike `xxd` which isn't installed everywhere --
+# hit this on the dev machine this file was edited on) to dump hex bytes,
+# then `tr -s ' ' '\n'` splits od's space-separated columns onto their own
+# lines and squeezes the repeated spaces before the first column, and
+# `grep -v '^$'` drops the resulting blank lines.
 $(HEXOUT): $(OUTPUT)
-	xxd -p $(OUTPUT) | tr -d '\n' | fold -w2 > $(HEXOUT)
+	od -An -v -tx1 $(OUTPUT) | tr -s ' ' '\n' | grep -v '^$$' > $(HEXOUT)
 
 clean:
 	rm -f $(OUTPUT) $(HEXOUT)
