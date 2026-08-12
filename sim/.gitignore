@@ -1,0 +1,8 @@
+# Matches sim/Makefile's `clean` target ($(OBJDIR) v586_tb.vcd)
+obj_dir/
+v586_tb.vcd
+
+# Matches sim/rom/Makefile's `clean` target ($(OUTPUT) $(HEXOUT)) --
+# boot.hex is intentionally committed (checked-in ROM image so the sim
+# runs without needing nasm), so only boot.bin is ignored here.
+rom/boot.bin
