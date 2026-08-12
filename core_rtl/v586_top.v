@@ -21,7 +21,7 @@ module v586(m00_AXI_RSTN, m00_AXI_CLK, m00_AXI_AWADDR, m00_AXI_AWVALID, m00_AXI_
 		 m01_AXI_WVALID, m01_AXI_WREADY, m01_AXI_WSTRB, m01_AXI_WLAST, m01_AXI_RDATA
 		, m01_AXI_RVALID, m01_AXI_RREADY, m01_AXI_RLAST, m01_AXI_BVALID,
 		 m01_AXI_BREADY, int_pic, iack, ivect, debug
-		, dbg_useq_ptr, dbg_pc_out);
+		, dbg_useq_ptr, dbg_pc_out, dbg_writeio_req, dbg_writeio_data);
 
 	input m00_AXI_RSTN;
 	input m00_AXI_CLK;
@@ -77,9 +77,13 @@ module v586(m00_AXI_RSTN, m00_AXI_CLK, m00_AXI_AWADDR, m00_AXI_AWVALID, m00_AXI_
 	output [4:0] debug;
 	output [3:0] dbg_useq_ptr;
 	output [31:0] dbg_pc_out;
+	output dbg_writeio_req;
+	output [31:0] dbg_writeio_data;
 
 	wire [3:0] write_msk;
 	wire [31:0] writeio_data;
+	assign dbg_writeio_req  = writeio_req;
+	assign dbg_writeio_data = writeio_data;
 	wire [31:0] readio_data;
 	wire [31:0] read_data;
 	wire [31:0] write_data;

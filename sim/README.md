@@ -48,14 +48,31 @@ make waves                  # run with trace, then open GTKWave with waves.gtkw 
 make clean                  # remove build output and traces
 ```
 
-Every write to `IO_PORT` (the classic PC "POST code" debug-output port,
-`0x80`, by default) prints as `[cycle NNN] IO WRITE port 0x80 <= 0xXX`,
-unconditionally (not suppressed by `--quiet`), plus a total count in the
-run summary. Implemented in [`rtl/axi_io_stub.v`](rtl/axi_io_stub.v)
-(`dbg_io_wr_valid`/`dbg_io_waddr`/`dbg_io_wdata`, latched off the
-existing AW/W handshake tracking) -- testbench-only, no `core_rtl`
-changes needed since `axi_io_stub` is simulation infrastructure v586
-already has ports for.
+The trace prints exactly three `[cycle NNN] ...` line types (everything
+else -- `useq_ptr` toggling, `m00_AXI` AR fetch activity, `iack` -- is
+still tracked silently for the run summary, just not printed per-event,
+since fetch/prefetch traffic isn't evidence of real execution):
+
+- `dbg_pc_out = 0xXXXXXXXX` on every change.
+- `RAM WRITE addr 0xXXXXXXXX <= 0xXXXXXXXX` on every real write to the
+  RAM region seen on `m00_AXI` (`axi_sim_mem.v`'s
+  `dbg_ram_wr_valid`/`waddr`/`wdata`).
+- `IO WRITE port 0xXX <= 0xXX` on every write to `IO_PORT` (default
+  `0x80`, the classic PC "POST code" debug port) seen on `m01_AXI`
+  (`axi_io_stub.v`'s `dbg_io_wr_valid`/`waddr`/`wdata`).
+
+All three are suppressed by `--quiet`/`QUIET=1`, and all three get a
+count in the run summary regardless. There's also a fourth debug signal,
+`writeio_req`/`writeio_data` (`v586_top.v`'s `dbg_writeio_req`/
+`dbg_writeio_data` -- the internal core<->biu32_axi I/O-write handshake,
+verified to be the literal same net as `vliw`'s own output ports with no
+intermediate logic), printed the same way when it pulses; see
+`core_rtl/README.md` for why that one exists.
+
+These are all testbench-only additions (`rtl/axi_sim_mem.v`,
+`rtl/axi_io_stub.v`, plus `core_rtl/v586_top.v`'s `dbg_writeio_*` ports
+for the one that reaches into `core_rtl`) -- see "Adding a new debug
+trace point" below to add your own.
 
 `make run` builds `obj_dir/Vv586_tb_top` from `core_rtl/*.v` + `gate_rtl/*.v`
 + `example/v586_example_top.v` + this directory's `tb/`/`rtl/`/`cpp/`

@@ -1,21 +1,27 @@
 // Verilator C++ driver for v586_tb_top.
 //
 // Drives clk/rstn directly (the DUT hierarchy generates neither), runs a
-// fixed number of clock cycles, optionally dumps a VCD trace, and logs:
-//   - m00_AXI instruction-fetch (AR) transactions -- what address the bus
-//     interface is asking to read. NOT proof of execution: prefetch/
-//     queue-fill traffic can touch an address the CPU never actually
-//     executes from.
-//   - dbg_useq_ptr -- deco's prefetch-queue consume pointer.
-//   - dbg_pc_out -- cpu's committed PC (fed back into useq's pc_in), the
-//     closest thing this core exposes to a real instruction pointer, but
-//     NOT reliable during early boot -- see sim/README.md.
-//   - m01_AXI (I/O space) writes to a specific port (default 0x80, the
+// fixed number of clock cycles, optionally dumps a VCD trace, and prints
+// a [cycle N] trace line for exactly three event types:
+//   - dbg_pc_out changes -- cpu's committed PC (fed back into useq's
+//     pc_in), the closest thing this core exposes to a real instruction
+//     pointer, but NOT reliable proof of real execution/retirement on
+//     its own -- see sim/README.md and core_rtl/README.md.
+//   - RAM writes (m00_AXI) -- via sim/rtl/axi_sim_mem.v's dbg_ram_*
+//     outputs. A real memory-store side effect, stronger evidence of
+//     execution than pc_out position alone.
+//   - I/O writes (m01_AXI) to a specific port (default 0x80, the
 //     classic PC "POST code" debug-output port), via
 //     sim/rtl/axi_io_stub.v's dbg_io_* outputs. Override with --io-port=N.
 //
-// See sim/rom/boot.hex and sim/README.md for the current reset-vector /
-// execution-pointer disambiguation trap and known limitations.
+// m00_AXI AR fetch activity and dbg_useq_ptr are still tracked (for the
+// run summary) but not printed per-event -- fetch/prefetch traffic can
+// touch an address the CPU never actually executes from, so it's noise
+// for a trace focused on real execution evidence.
+//
+// See sim/rom/boot.hex, sim/README.md and core_rtl/README.md for the
+// current reset-vector / execution-pointer investigation and known
+// limitations.
 //
 // Usage: v586_sim [--cycles=N] [--trace[=file.vcd]] [--quiet] [--io-port=N]
 
@@ -87,6 +93,9 @@ int main(int argc, char **argv) {
 	uint8_t last_useq_ptr = 0xFF;
 
 	uint64_t io_watch_port_writes = 0;
+	uint64_t ram_writes = 0;
+	uint8_t  last_writeio_req = 0;
+	uint64_t writeio_req_pulses = 0;
 
 	uint64_t cycle = 0;
 	const uint64_t reset_cycles = 10;
@@ -106,18 +115,19 @@ int main(int argc, char **argv) {
 		if (tfp) tfp->dump(g_time);
 		g_time++;
 
+		// Tracked silently for the summary -- not printed per-event, since
+		// fetch/prefetch traffic can touch an address the CPU never
+		// actually executes from (noise for a trace focused on real
+		// execution evidence).
 		if (top->rstn && top->mon_m00_ARVALID && top->mon_m00_ARREADY) {
 			ar_transactions++;
 			if (top->mon_m00_ARADDR != last_araddr) {
-				if (!quiet) {
-					printf("[cycle %6llu] m00_AXI AR fetch addr = 0x%08x (delta %llu cycles since last change)\n",
-					       static_cast<unsigned long long>(cycle),
-					       top->mon_m00_ARADDR,
-					       static_cast<unsigned long long>(cycle - last_araddr_change_cycle));
-				}
 				last_araddr = top->mon_m00_ARADDR;
 				last_araddr_change_cycle = cycle;
 			}
+		}
+		if (top->rstn && top->mon_useq_ptr != last_useq_ptr) {
+			last_useq_ptr = top->mon_useq_ptr;
 		}
 
 		if (top->rstn && top->mon_pc_out != last_pc_out) {
@@ -139,23 +149,31 @@ int main(int argc, char **argv) {
 			}
 		}
 
-		if (top->rstn && top->mon_useq_ptr != last_useq_ptr) {
+		if (top->rstn && top->mon_ram_wr_valid) {
+			ram_writes++;
 			if (!quiet) {
-				printf("[cycle %6llu] dbg_useq_ptr = 0x%x\n",
-				       static_cast<unsigned long long>(cycle), top->mon_useq_ptr);
+				printf("[cycle %6llu] RAM WRITE addr 0x%08x <= 0x%08x\n",
+				       static_cast<unsigned long long>(cycle),
+				       top->mon_ram_waddr, top->mon_ram_wdata);
 			}
-			last_useq_ptr = top->mon_useq_ptr;
 		}
 
-		if (top->rstn && top->mon_iack) {
-			if (!quiet) printf("[cycle %6llu] iack asserted\n", static_cast<unsigned long long>(cycle));
+		if (top->rstn && top->mon_writeio_req && !last_writeio_req) {
+			writeio_req_pulses++;
+			if (!quiet) {
+				printf("[cycle %6llu] writeio_req (core->biu32_axi) data=0x%08x\n",
+				       static_cast<unsigned long long>(cycle), top->mon_writeio_data);
+			}
 		}
+		last_writeio_req = top->mon_writeio_req;
 
 		if (top->rstn && top->mon_io_wr_valid && top->mon_io_waddr == io_watch_port) {
 			io_watch_port_writes++;
-			printf("[cycle %6llu] IO WRITE port 0x%02x <= 0x%02x\n",
-			       static_cast<unsigned long long>(cycle), io_watch_port,
-			       top->mon_io_wdata & 0xFF);
+			if (!quiet) {
+				printf("[cycle %6llu] IO WRITE port 0x%02x <= 0x%02x\n",
+				       static_cast<unsigned long long>(cycle), io_watch_port,
+				       top->mon_io_wdata & 0xFF);
+			}
 		}
 
 		cycle++;
@@ -180,8 +198,10 @@ int main(int argc, char **argv) {
 	printf("last dbg_pc_out value    : 0x%08x (static for last %llu cycles)\n",
 	       last_pc_out, static_cast<unsigned long long>(cycles_since_pc_out_change));
 	printf("final debug[4:0]         : 0x%x\n", top->mon_debug);
+	printf("RAM writes               : %llu\n", static_cast<unsigned long long>(ram_writes));
 	printf("IO writes to port 0x%02x  : %llu\n", io_watch_port,
 	       static_cast<unsigned long long>(io_watch_port_writes));
+	printf("writeio_req pulses       : %llu\n", static_cast<unsigned long long>(writeio_req_pulses));
 	if (trace_on) printf("trace written to        : %s\n", vcd_path.c_str());
 
 	if (ar_transactions == 0) {

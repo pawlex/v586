@@ -95,7 +95,15 @@ module v586_example_top (
 	// into useq's pc_in -- the closest thing to a real instruction
 	// pointer this core exposes internally).
 	output wire [3:0]  dbg_useq_ptr,
-	output wire [31:0] dbg_pc_out
+	output wire [31:0] dbg_pc_out,
+
+	// writeio_req/writeio_data -- internal handshake between core and
+	// biu32_axi (core requests an I/O write; biu32_axi translates it to
+	// a real m01_AXI transaction). Exposed to check whether the gap
+	// between "instruction retired" and "external bus write" is inside
+	// biu32_axi's translation, or upstream of this signal entirely.
+	output wire        dbg_writeio_req,
+	output wire [31:0] dbg_writeio_data
 );
 
 	v586 u_v586 (
@@ -156,7 +164,10 @@ module v586_example_top (
 		.debug           (debug),
 
 		.dbg_useq_ptr    (dbg_useq_ptr),
-		.dbg_pc_out      (dbg_pc_out)
+		.dbg_pc_out      (dbg_pc_out),
+
+		.dbg_writeio_req  (dbg_writeio_req),
+		.dbg_writeio_data (dbg_writeio_data)
 	);
 
 endmodule

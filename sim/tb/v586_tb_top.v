@@ -36,7 +36,16 @@ module v586_tb_top (
 	// I/O-space write logging (m01_AXI, via axi_io_stub.v)
 	output wire        mon_io_wr_valid,
 	output wire [31:0] mon_io_waddr,
-	output wire [31:0] mon_io_wdata
+	output wire [31:0] mon_io_wdata,
+
+	// RAM write logging (m00_AXI, via axi_sim_mem.v)
+	output wire        mon_ram_wr_valid,
+	output wire [31:0] mon_ram_waddr,
+	output wire [31:0] mon_ram_wdata,
+
+	// core<->biu32_axi internal I/O-write handshake (see v586_top.v)
+	output wire        mon_writeio_req,
+	output wire [31:0] mon_writeio_data
 );
 
 	wire [31:0] m00_AXI_AWADDR;
@@ -150,7 +159,10 @@ module v586_tb_top (
 		.debug           (debug),
 
 		.dbg_useq_ptr    (useq_ptr),
-		.dbg_pc_out      (pc_out)
+		.dbg_pc_out      (pc_out),
+
+		.dbg_writeio_req  (mon_writeio_req),
+		.dbg_writeio_data (mon_writeio_data)
 	);
 
 	axi_sim_mem #(
@@ -158,7 +170,7 @@ module v586_tb_top (
 		.ROM_BASE  (32'h000E_0000),
 		.ROM_BYTES (32'h0002_0000),
 		.ROM_FILE  ("rom/boot.hex"),
-		.SHADOW_BASE (32'hFFFF_0000)
+		.SHADOW_BASE (32'hFFFE_0000)
 	) u_mem (
 		.clk          (clk),
 		.rstn         (rstn),
@@ -180,7 +192,11 @@ module v586_tb_top (
 		.axi_RDATA    (m00_AXI_RDATA),
 		.axi_RVALID   (m00_AXI_RVALID),
 		.axi_RREADY   (m00_AXI_RREADY),
-		.axi_RLAST    (m00_AXI_RLAST)
+		.axi_RLAST    (m00_AXI_RLAST),
+
+		.dbg_ram_wr_valid (mon_ram_wr_valid),
+		.dbg_ram_waddr    (mon_ram_waddr),
+		.dbg_ram_wdata    (mon_ram_wdata)
 	);
 
 	axi_io_stub u_io (
