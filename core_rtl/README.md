@@ -207,18 +207,37 @@ Summary of where this stands (full detail and running log of evidence in
   kept because `SHADOW_BASE + ROM_BYTES` lands exactly on `2^32`, so the
   full 128KiB `ROM_BYTES` fits with no truncation (`0xFFFF_0000` only
   left room for 64KiB before hitting the 32-bit ceiling).
+- **Ran 2,000,000 cycles (40x longer than anything tried before, 27.6s
+  wall time) -- still zero `writeio_req`/RAM/IO writes.** But the result
+  needs a caveat: `m00_AXI` AR beats stayed flat at 84 for the whole run
+  while `dbg_pc_out` racked up 497,889 changes, meaning external fetch
+  activity stopped almost immediately and everything after was `pc_out`
+  re-scanning the same already-buffered ~1KB (`0xFFC00`-`0xFFFFF`)
+  region -- expected, since `boot.asm`'s `reset_vector_0xFFFF0` far-jumps
+  back to `trap_0xFFC00` unconditionally, making the current test program
+  a closed 8-instruction loop. This *does* rule out "the current loop
+  just needs more iterations", but it does NOT properly test "retirement
+  lags prefetch" in general, since a closed loop can't explore new
+  ground no matter how many times it repeats. A real test of that
+  hypothesis needs a non-looping program (e.g. a long straight-line NOP
+  sled with the marker instructions at the very end) so a long run
+  actually reaches new, previously-unscanned bytes.
 
 ### TODO / next steps
 
 1. **Figure out why `vliw` never asserts `writeio_req`** (or performs a
    RAM store) despite correctly parsing both instruction types' lengths.
    This is now the central open question -- everything downstream
-   (`biu32_axi`, `core`, renaming) has been ruled out. Candidates: run
-   far longer in case retirement lags prefetch by more than we've
-   tested; or find `vliw`'s actual decode-to-execute dispatch signals
-   (what triggers a micro-op to actually run, as opposed to just being
-   scanned for length) and trace those directly instead of inferring
-   from `pc_out`/bus activity.
+   (`biu32_axi`, `core`, renaming) has been ruled out, and "just run the
+   current loop longer" has been tried (2M cycles, no change -- see
+   above) and doesn't apply since the current test program is a closed
+   loop. Better next candidates: (a) write a non-looping test program
+   (straight-line NOP sled, markers at the end) and run that long, to
+   properly test whether retirement lags prefetch by more than a few
+   instructions' worth; or (b) find `vliw`'s actual decode-to-execute
+   dispatch signals (what triggers a micro-op to actually run, as
+   opposed to just being scanned for length) and trace those directly
+   instead of inferring from `pc_out`/bus activity.
 2. **Trace `deco`'s `in128` input** (the 128-bit instruction window it
    decodes from, sourced from `useq.squeue`) alongside `dbg_pc_out`, to
    get ground truth on what bytes the decoder actually has at a given
@@ -230,11 +249,9 @@ Summary of where this stands (full detail and running log of evidence in
    out when/whether `purge` actually completes. Lower priority given the
    evidence it may not be on the critical path for the execution-pointer
    question, but still an open thread.
-4. **Run much longer** (tens/hundreds of thousands of cycles). The
-   current `boot.asm` loops `reset_vector_0xFFFF0` back to
-   `trap_0xFFC00` via a far jump, so it stays naturally bounded within
-   `0xFFC00`-`0xFFFFF` rather than running off the mapped ROM -- but
-   `axi_sim_mem.v` still has no 20-bit real-mode wraparound in general
-   (see `sim/README.md`'s "Known limitations"), so any new test code
-   that walks forward past `0xFFFFF` will hit unmapped space rather than
-   wrapping to `0x00000`, same as before.
+4. **Write a non-looping test program** for the long-run test in (1):
+   `axi_sim_mem.v` still has no 20-bit real-mode wraparound (see
+   `sim/README.md`'s "Known limitations"), so a straight-line NOP sled
+   walking forward will hit unmapped space past `0xFFFFF` rather than
+   wrapping to `0x00000` -- either keep it within one ~128KiB ROM's
+   worth of NOPs, or extend `axi_sim_mem.v` with real wraparound first.
