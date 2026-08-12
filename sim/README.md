@@ -43,9 +43,19 @@ cd sim
 make run                    # build (if needed) + run, 20000 cycles, no trace
 make run CYCLES=200000      # override the cycle count
 make run TRACE=1            # also write v586_tb.vcd
+make run IO_PORT=0x3F8      # log writes to a different I/O port (default 0x80)
 make waves                  # run with trace, then open GTKWave with waves.gtkw loaded
 make clean                  # remove build output and traces
 ```
+
+Every write to `IO_PORT` (the classic PC "POST code" debug-output port,
+`0x80`, by default) prints as `[cycle NNN] IO WRITE port 0x80 <= 0xXX`,
+unconditionally (not suppressed by `--quiet`), plus a total count in the
+run summary. Implemented in [`rtl/axi_io_stub.v`](rtl/axi_io_stub.v)
+(`dbg_io_wr_valid`/`dbg_io_waddr`/`dbg_io_wdata`, latched off the
+existing AW/W handshake tracking) -- testbench-only, no `core_rtl`
+changes needed since `axi_io_stub` is simulation infrastructure v586
+already has ports for.
 
 `make run` builds `obj_dir/Vv586_tb_top` from `core_rtl/*.v` + `gate_rtl/*.v`
 + `example/v586_example_top.v` + this directory's `tb/`/`rtl/`/`cpp/`

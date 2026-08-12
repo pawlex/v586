@@ -37,10 +37,20 @@ module axi_io_stub (
 	output reg  [31:0] axi_RDATA,
 	output reg         axi_RVALID,
 	input  wire        axi_RREADY,
-	output reg         axi_RLAST
+	output reg         axi_RLAST,
+
+	// Debug/trace-only outputs -- pulse dbg_io_wr_valid for one cycle
+	// whenever a write completes, with the address/data that were
+	// written. Not part of the AXI interface; for sim_main.cpp to log
+	// I/O writes (e.g. port 0x80 debug-output writes) without needing
+	// its own AXI handshake tracking.
+	output reg         dbg_io_wr_valid,
+	output reg  [31:0] dbg_io_waddr,
+	output reg  [31:0] dbg_io_wdata
 );
 
 	reg aw_seen, w_seen;
+	reg [31:0] awaddr_latch;
 
 	always @(posedge clk or negedge rstn)
 	if (~rstn) begin
@@ -53,16 +63,28 @@ module axi_io_stub (
 		axi_RVALID  <= 1'b0;
 		axi_RLAST   <= 1'b0;
 		axi_RDATA   <= 32'h0;
+		awaddr_latch    <= 32'h0;
+		dbg_io_wr_valid <= 1'b0;
+		dbg_io_waddr    <= 32'h0;
+		dbg_io_wdata    <= 32'h0;
 	end else begin
 		// AW
 		axi_AWREADY <= axi_AWVALID & ~aw_seen & ~w_seen;
-		if (axi_AWVALID & ~aw_seen & ~w_seen)
-			aw_seen <= 1'b1;
+		if (axi_AWVALID & ~aw_seen & ~w_seen) begin
+			aw_seen      <= 1'b1;
+			awaddr_latch <= axi_AWADDR;
+		end
 
 		// W
 		axi_WREADY <= axi_WVALID & aw_seen & ~w_seen;
-		if (axi_WVALID & aw_seen & ~w_seen & axi_WLAST)
-			w_seen <= 1'b1;
+		if (axi_WVALID & aw_seen & ~w_seen & axi_WLAST) begin
+			w_seen          <= 1'b1;
+			dbg_io_wr_valid <= 1'b1;
+			dbg_io_waddr    <= awaddr_latch;
+			dbg_io_wdata    <= axi_WDATA;
+		end else begin
+			dbg_io_wr_valid <= 1'b0;
+		end
 
 		// B
 		if (aw_seen & w_seen & ~axi_BVALID) begin

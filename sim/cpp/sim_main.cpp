@@ -8,15 +8,16 @@
 //     executes from.
 //   - dbg_useq_ptr -- deco's prefetch-queue consume pointer.
 //   - dbg_pc_out -- cpu's committed PC (fed back into useq's pc_in), the
-//     closest thing this core exposes to a real instruction pointer.
+//     closest thing this core exposes to a real instruction pointer, but
+//     NOT reliable during early boot -- see sim/README.md.
+//   - m01_AXI (I/O space) writes to a specific port (default 0x80, the
+//     classic PC "POST code" debug-output port), via
+//     sim/rtl/axi_io_stub.v's dbg_io_* outputs. Override with --io-port=N.
 //
-// boot.hex places a HLT (0xF4) at physical 0xFFC00 with a JMP-over
-// immediately before it, specifically so that dbg_pc_out settling AND
-// STOPPING exactly at 0xFFC00 is distinguishable from mere fetch-bus
-// traffic passing near that address (see sim/rom/boot.hex and
-// sim/README.md for the reasoning).
+// See sim/rom/boot.hex and sim/README.md for the current reset-vector /
+// execution-pointer disambiguation trap and known limitations.
 //
-// Usage: v586_sim [--cycles=N] [--trace[=file.vcd]] [--quiet]
+// Usage: v586_sim [--cycles=N] [--trace[=file.vcd]] [--quiet] [--io-port=N]
 
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +39,7 @@ int main(int argc, char **argv) {
 	bool trace_on = false;
 	bool quiet = false;
 	std::string vcd_path = "v586_tb.vcd";
+	uint32_t io_watch_port = 0x80;
 
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -50,6 +52,8 @@ int main(int argc, char **argv) {
 			trace_on = true;
 		} else if (arg == "--quiet") {
 			quiet = true;
+		} else if (arg.rfind("--io-port=", 0) == 0) {
+			io_watch_port = static_cast<uint32_t>(strtoul(arg.c_str() + 10, nullptr, 0));
 		}
 	}
 
@@ -81,6 +85,8 @@ int main(int argc, char **argv) {
 	uint64_t pc_out_f00000_first_cycle = 0;
 
 	uint8_t last_useq_ptr = 0xFF;
+
+	uint64_t io_watch_port_writes = 0;
 
 	uint64_t cycle = 0;
 	const uint64_t reset_cycles = 10;
@@ -145,6 +151,13 @@ int main(int argc, char **argv) {
 			if (!quiet) printf("[cycle %6llu] iack asserted\n", static_cast<unsigned long long>(cycle));
 		}
 
+		if (top->rstn && top->mon_io_wr_valid && top->mon_io_waddr == io_watch_port) {
+			io_watch_port_writes++;
+			printf("[cycle %6llu] IO WRITE port 0x%02x <= 0x%02x\n",
+			       static_cast<unsigned long long>(cycle), io_watch_port,
+			       top->mon_io_wdata & 0xFF);
+		}
+
 		cycle++;
 	}
 
@@ -167,6 +180,8 @@ int main(int argc, char **argv) {
 	printf("last dbg_pc_out value    : 0x%08x (static for last %llu cycles)\n",
 	       last_pc_out, static_cast<unsigned long long>(cycles_since_pc_out_change));
 	printf("final debug[4:0]         : 0x%x\n", top->mon_debug);
+	printf("IO writes to port 0x%02x  : %llu\n", io_watch_port,
+	       static_cast<unsigned long long>(io_watch_port_writes));
 	if (trace_on) printf("trace written to        : %s\n", vcd_path.c_str());
 
 	if (ar_transactions == 0) {

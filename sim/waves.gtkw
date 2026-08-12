@@ -33,6 +33,11 @@ TOP.v586_tb_top.mon_useq_ptr[3:0]
 TOP.v586_tb_top.mon_iack
 @22
 TOP.v586_tb_top.mon_debug[4:0]
+@28
+TOP.v586_tb_top.mon_io_wr_valid
+@22
+TOP.v586_tb_top.mon_io_waddr[31:0]
+TOP.v586_tb_top.mon_io_wdata[31:0]
 
 -useq internals (core_rtl/v586_useq.v) -- reset-vector / purge investigation
 @22

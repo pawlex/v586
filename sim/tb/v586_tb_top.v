@@ -31,7 +31,12 @@ module v586_tb_top (
 	output wire [4:0]  mon_debug,
 	output wire        mon_iack,
 	output wire [3:0]  mon_useq_ptr,
-	output wire [31:0] mon_pc_out
+	output wire [31:0] mon_pc_out,
+
+	// I/O-space write logging (m01_AXI, via axi_io_stub.v)
+	output wire        mon_io_wr_valid,
+	output wire [31:0] mon_io_waddr,
+	output wire [31:0] mon_io_wdata
 );
 
 	wire [31:0] m00_AXI_AWADDR;
@@ -152,7 +157,8 @@ module v586_tb_top (
 		.RAM_BYTES (32'h000A_0000),
 		.ROM_BASE  (32'h000E_0000),
 		.ROM_BYTES (32'h0002_0000),
-		.ROM_FILE  ("rom/boot.hex")
+		.ROM_FILE  ("rom/boot.hex"),
+		.SHADOW_BASE (32'hFFFF_0000)
 	) u_mem (
 		.clk          (clk),
 		.rstn         (rstn),
@@ -196,7 +202,11 @@ module v586_tb_top (
 		.axi_RDATA    (m01_AXI_RDATA),
 		.axi_RVALID   (m01_AXI_RVALID),
 		.axi_RREADY   (m01_AXI_RREADY),
-		.axi_RLAST    (m01_AXI_RLAST)
+		.axi_RLAST    (m01_AXI_RLAST),
+
+		.dbg_io_wr_valid (mon_io_wr_valid),
+		.dbg_io_waddr    (mon_io_waddr),
+		.dbg_io_wdata    (mon_io_wdata)
 	);
 
 	assign mon_m00_ARADDR  = m00_AXI_ARADDR;

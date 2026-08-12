@@ -2,24 +2,37 @@
 // axi_sim_mem -- simulation-only AXI4 slave backing v586's m00_AXI
 // (code fetch + data) master port.
 //
-// Presents two byte-addressable regions in one flat AXI4 slave, modeled
+// Presents three byte-addressable regions in one flat AXI4 slave, modeled
 // after soc_rtl/axi_rom.v's read-channel style (registered handshakes,
 // burst-capable AR/R), extended with a write channel (AW/W/B) for RAM:
 //
-//   RAM: [0, RAM_BYTES)                  read/write
-//   ROM: [ROM_BASE, ROM_BASE+ROM_BYTES)  read-only, loaded via $readmemh
+//   RAM:    [0, RAM_BYTES)                          read/write
+//   ROM:    [ROM_BASE, ROM_BASE+ROM_BYTES)           read-only, $readmemh
+//   SHADOW: [SHADOW_BASE, SHADOW_BASE+ROM_BYTES)     read-only, mirrors ROM
 //
-// Anything outside both regions reads as 0 and silently discards writes,
-// so a stray access can't hang the bus.
+// SHADOW mirrors the exact same rom[] array at a second base address
+// (default 0xFFFF_0000). Added to test a hypothesis from dbg_pc_out
+// tracing: pc_out reports {CS,IP} as a raw 16+16 concatenation rather
+// than a computed address (see core_rtl/README.md), so it's plausible
+// the real fetch-address generation does something similarly
+// non-standard (e.g. CS<<16 | IP instead of CS*16 + IP) -- for
+// CS=0xFFFF that would land fetches near 0xFFFF0000, not the classic
+// real-mode 0xFFFF0. Mirroring the ROM there lets us observe what
+// happens if a fetch actually lands there, instead of just reading
+// unmapped zeros.
+//
+// Anything outside all three regions reads as 0 and silently discards
+// writes, so a stray access can't hang the bus.
 //
 // Not synthesizable RTL -- simulation/testbench infrastructure only.
 //------------------------------------------------------------------------
 
 module axi_sim_mem #(
-	parameter RAM_BYTES = 32'h0000_9000,
-	parameter ROM_BASE  = 32'h000E_0000,
-	parameter ROM_BYTES = 32'h0002_0000,
-	parameter ROM_FILE  = "boot.hex"
+	parameter RAM_BYTES    = 32'h0000_9000,
+	parameter ROM_BASE     = 32'h000E_0000,
+	parameter ROM_BYTES    = 32'h0002_0000,
+	parameter ROM_FILE     = "boot.hex",
+	parameter SHADOW_BASE  = 32'hFFFF_0000
 ) (
 	input  wire        clk,
 	input  wire        rstn,
@@ -76,6 +89,16 @@ module axi_sim_mem #(
 				rd_byte = ram[addr[19:0]];
 			else if ((addr >= ROM_BASE) && (addr < (ROM_BASE + ROM_BYTES)))
 				rd_byte = rom[addr - ROM_BASE];
+			// SHADOW_BASE + ROM_BYTES can overflow 32 bits (it does for the
+			// default 0xFFFF_0000 base with a 128KiB ROM_BYTES), so don't
+			// compute that sum as an upper bound -- addr can never exceed
+			// 32'hFFFF_FFFF anyway, which naturally caps this region at
+			// (32'hFFFF_FFFF - SHADOW_BASE + 1) bytes. For the default
+			// base that's 64KiB, safely within the rom[] array's bounds
+			// (ROM_BYTES=128KiB) as long as SHADOW_BASE stays this close
+			// to the top of the address space.
+			else if (addr >= SHADOW_BASE)
+				rd_byte = rom[addr - SHADOW_BASE];
 			else
 				rd_byte = 8'h00;
 		end
