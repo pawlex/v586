@@ -4918,31 +4918,31 @@ module useq(iaddr, idata, code_req, code_ack, clk, rstn, useq_ptr, squeue, pc_in
 		3]));
 	notech_mux2 i_22142(.S(\nbus_12122[0] ), .A(iaddr[3]), .B(n_30259909), .Z
 		(n_15581));
-	notech_reg addr_reg_4(.CP(n_63480), .D(n_15587), .CD(n_62696), .Q(iaddr[
+	notech_reg_set addr_reg_4(.CP(n_63480), .D(n_15587), .SD(n_62696), .Q(iaddr[
 		4]));
 	notech_mux2 i_22150(.S(\nbus_12122[0] ), .A(iaddr[4]), .B(n_36987), .Z(n_15587
 		));
 	notech_and4 i_1724983(.A(n_2203), .B(n_2202), .C(n_2197), .D(n_2201), .Z
 		(squeue_16101071));
-	notech_reg addr_reg_5(.CP(n_63554), .D(n_15593), .CD(n_62696), .Q(iaddr[
+	notech_reg_set addr_reg_5(.CP(n_63554), .D(n_15593), .SD(n_62696), .Q(iaddr[
 		5]));
 	notech_mux2 i_22158(.S(\nbus_12122[0] ), .A(iaddr[5]), .B(n_36993), .Z(n_15593
 		));
 	notech_nand3 i_50534425(.A(n_59657), .B(n_59928), .C(queue[16]), .Z(n_1398
 		));
-	notech_reg addr_reg_6(.CP(n_63554), .D(n_15599), .CD(n_62696), .Q(iaddr[
+	notech_reg_set addr_reg_6(.CP(n_63554), .D(n_15599), .SD(n_62696), .Q(iaddr[
 		6]));
 	notech_mux2 i_22166(.S(\nbus_12122[0] ), .A(iaddr[6]), .B(n_36999), .Z(n_15599
 		));
-	notech_reg addr_reg_7(.CP(n_63554), .D(n_15605), .CD(n_62697), .Q(iaddr[
+	notech_reg_set addr_reg_7(.CP(n_63554), .D(n_15605), .SD(n_62697), .Q(iaddr[
 		7]));
 	notech_mux2 i_22174(.S(\nbus_12122[0] ), .A(iaddr[7]), .B(n_37005), .Z(n_15605
 		));
-	notech_reg addr_reg_8(.CP(n_63554), .D(n_15611), .CD(n_62699), .Q(iaddr[
+	notech_reg_set addr_reg_8(.CP(n_63554), .D(n_15611), .SD(n_62699), .Q(iaddr[
 		8]));
 	notech_mux2 i_22182(.S(\nbus_12122[0] ), .A(iaddr[8]), .B(n_37011), .Z(n_15611
 		));
-	notech_reg addr_reg_9(.CP(n_63554), .D(n_15617), .CD(n_62699), .Q(iaddr[
+	notech_reg_set addr_reg_9(.CP(n_63554), .D(n_15617), .SD(n_62699), .Q(iaddr[
 		9]));
 	notech_mux2 i_22190(.S(\nbus_12122[0] ), .A(iaddr[9]), .B(n_37017), .Z(n_15617
 		));

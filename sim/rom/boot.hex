@@ -1,27 +1,63 @@
-// boot.hex -- minimal reset-vector smoke test for sim/rtl/axi_sim_mem.v's
-// 128KiB ROM (mapped at 0xE0000-0xFFFFF).
+// boot.hex -- reset-vector / execution-pointer disambiguation test, v2.
 //
-// The first real run of this testbench showed the core issuing a steady,
-// unbroken sequence of code-fetch (AR) bursts starting at physical
-// address 0xFFC00 and incrementing by 0x10 (one 128-bit fetch line)
-// every 143 cycles, for as long as the run lasted -- i.e. it was
-// executing straight through the zero-filled ROM (0x00 0x00 decodes as
-// "ADD [bx+si], al", a harmless 2-byte fall-through). 0xFFC00-0xFFFFF is
-// exactly 1KB, matching soc_rtl/axi_rom.v's original 1KB boot ROM size,
-// so 0xFFC00 (top of the 1MB real-mode address space minus 1KB) looks
-// like this core's actual reset fetch address -- not the classic
-// 8086-style 0xFFFF0 assumed in an earlier version of this file.
+// The ROM (sim/rtl/axi_sim_mem.v) default-fills as a flat NOP (0x90) sled
+// across the whole 128KiB window. This file overrides only the bytes
+// near physical 0xFFC00, which fetch-address tracing showed the core
+// hitting during an early "purge" boot sequence, AND which dbg_pc_out
+// (cpu's real committed PC) showed as the genuine execution start point
+// -- contradicting the useq.v addr_reg reset-vector edit on this branch,
+// which only affects the fetch-address (iaddr) register, not pc_out.
 //
-// ROM offsets (ROM_BASE = 0xE0000): 0xFFC00 -> 0x1FC00, 0xFFFF0 -> 0x1FFF0.
+// v1 of this trap used HLT (0xF4) and it did not stop execution --
+// either HLT isn't implemented, or there's a fetch/decode timing offset
+// that made a single-byte trap ambiguous. v2 replaces it with a genuine
+// long jump instead: a near JMP with a 32-bit relative displacement
+// (0x66 operand-size prefix + 0xE9), landing at physical 0xF00000 --
+// deliberately far outside every mapped region (RAM [0,0xA0000), ROM
+// [0xE0000,0x100000)) so there is no other plausible source for fetch/PC
+// activity at that exact address. Chosen over a short relative self-loop
+// specifically because a genuine long jump should force a real pipeline
+// redirect/refetch, instead of something a tight loop might handle
+// ambiguously (as apparently happened with the +2-per-step dbg_pc_out
+// stepping we saw walking straight through the HLT byte).
 //
-// Program: an infinite self-jump (JMP $-2 = EB FE) placed at both
-// candidate addresses, so a successful boot is observable as the
-// code-fetch address converging and staying fixed, regardless of which
-// hypothesis turns out to be right. Intentionally the simplest possible
-// test -- only exercises reset, instruction fetch, decode, and a
-// relative branch; no assumption about default data/stack segment
-// bases, which a memory-touching test would need.
+//   physical 0xFFBFE-0xFFBFF (ROM offset 0x1FBFE): EB 06         JMP +6
+//   physical 0xFFC00-0xFFC05 (ROM offset 0x1FC00): 66 E9 FA 03 E0 00
+//                                                   JMP near 0x00F00000
+//
+// JMP +6 skips exactly the 6-byte trap instruction for anything that
+// merely walks the NOP sled past this point sequentially -- it will NOT
+// jump to 0xF00000 unless something lands directly on 0xFFC00.
+//
+// This core evidently supports 32-bit operand-size prefixed instructions
+// (cr0/cr3/paging signals are present elsewhere in the design, i.e. this
+// is a real protected-mode-capable core), which is why a 0x66-prefixed
+// rel32 near jump was chosen over a 16-bit far jump (ptr16:16, opcode
+// 0xEA) -- the latter's max reachable physical address in real mode is
+// only ~0x10FFEF, nowhere near 0xF00000.
+//
+// If dbg_pc_out (or the m00_AXI AR fetch address) is ever observed at
+// exactly 0x00F00000, that's unambiguous confirmation real execution
+// reached and jumped from 0xFFC00.
+//
+// Boundary guard, added to allow much longer runs without the fetch/PC
+// walk running off the mapped ROM entirely: axi_sim_mem.v does not
+// implement real 8086-style 20-bit address wraparound (0xFFFFF+1 does
+// NOT wrap to 0x00000 here -- see sim/README.md's "Known limitations"),
+// so a plain NOP sled would just walk forever into unmapped space past
+// 0xFFFFF. Instead, a relative jump near the very end of the ROM bounces
+// execution back into the mapped region before it can run off the edge:
+//
+//   physical 0xFFFFC-0xFFFFE (ROM offset 0x1FFFC): E9 7E FF
+//                                                   JMP near $-127 (-> 0xFFF7D)
+//
+// This is a testbench-side control measure (in the boot image, not the
+// RTL or the memory model) -- it does not change core_rtl behavior, it
+// just keeps a long run confined to addresses this testbench actually
+// modeled a real hardware response for.
+@1fbfe
+EB 06
 @1fc00
-EB FE
-@1fff0
-EB FE
+66 E9 FA 03 E0 00
+@1fffc
+E9 7E FF

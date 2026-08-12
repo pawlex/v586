@@ -80,7 +80,7 @@ run: $(BIN)
 
 waves: TRACE := 1
 waves: run
-	gtkwave v586_tb.vcd &
+	gtkwave -a waves.gtkw v586_tb.vcd &
 
 clean:
 	rm -rf $(OBJDIR) v586_tb.vcd

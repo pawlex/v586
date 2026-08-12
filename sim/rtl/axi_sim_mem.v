@@ -56,7 +56,12 @@ module axi_sim_mem #(
 	integer init_i;
 	initial begin
 		for (init_i = 0; init_i < RAM_BYTES; init_i = init_i + 1) ram[init_i] = 8'h00;
-		for (init_i = 0; init_i < ROM_BYTES; init_i = init_i + 1) rom[init_i] = 8'h00;
+		// Default-fill the ROM with NOP (0x90) rather than 0x00 -- a flat
+		// NOP sled across the whole 128KiB window, so any entry point just
+		// falls through harmlessly instead of executing 0x00 0x00
+		// ("ADD [bx+si], al", a real memory-touching instruction).
+		// boot.hex below overrides the specific bytes that matter.
+		for (init_i = 0; init_i < ROM_BYTES; init_i = init_i + 1) rom[init_i] = 8'h90;
 		$readmemh(ROM_FILE, rom);
 	end
 

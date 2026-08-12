@@ -20,7 +20,8 @@ module v586(m00_AXI_RSTN, m00_AXI_CLK, m00_AXI_AWADDR, m00_AXI_AWVALID, m00_AXI_
 		, m01_AXI_ARBURST, m01_AXI_ARLEN, m01_AXI_ARSIZE, m01_AXI_WDATA,
 		 m01_AXI_WVALID, m01_AXI_WREADY, m01_AXI_WSTRB, m01_AXI_WLAST, m01_AXI_RDATA
 		, m01_AXI_RVALID, m01_AXI_RREADY, m01_AXI_RLAST, m01_AXI_BVALID,
-		 m01_AXI_BREADY, int_pic, iack, ivect, debug);
+		 m01_AXI_BREADY, int_pic, iack, ivect, debug
+		, dbg_useq_ptr, dbg_pc_out);
 
 	input m00_AXI_RSTN;
 	input m00_AXI_CLK;
@@ -74,6 +75,8 @@ module v586(m00_AXI_RSTN, m00_AXI_CLK, m00_AXI_AWADDR, m00_AXI_AWVALID, m00_AXI_
 	output iack;
 	input [7:0] ivect;
 	output [4:0] debug;
+	output [3:0] dbg_useq_ptr;
+	output [31:0] dbg_pc_out;
 
 	wire [3:0] write_msk;
 	wire [31:0] writeio_data;
@@ -214,5 +217,6 @@ module v586(m00_AXI_RSTN, m00_AXI_CLK, m00_AXI_AWADDR, m00_AXI_AWVALID, m00_AXI_
 		, \Daddr[15] , \Daddr[14] , \Daddr[13] , \Daddr[12] , \Daddr[11] 
 		, \Daddr[10] , \Daddr[9] , \Daddr[8] , \Daddr[7] , \Daddr[6] , \Daddr[5] 
 		, \Daddr[4] , \Daddr[3] , \Daddr[2] , UNCONNECTED_086, 
-		UNCONNECTED_087}), .busy_ram(busy_ram));
+		UNCONNECTED_087}), .busy_ram(busy_ram)
+		, .dbg_useq_ptr(dbg_useq_ptr), .dbg_pc_out(dbg_pc_out));
 endmodule

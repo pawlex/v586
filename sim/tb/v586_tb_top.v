@@ -29,7 +29,9 @@ module v586_tb_top (
 	output wire [31:0] mon_m00_AWADDR,
 	output wire        mon_m00_AWVALID,
 	output wire [4:0]  mon_debug,
-	output wire        mon_iack
+	output wire        mon_iack,
+	output wire [3:0]  mon_useq_ptr,
+	output wire [31:0] mon_pc_out
 );
 
 	wire [31:0] m00_AXI_AWADDR;
@@ -82,6 +84,8 @@ module v586_tb_top (
 
 	wire        iack;
 	wire [4:0]  debug;
+	wire [3:0]  useq_ptr;
+	wire [31:0] pc_out;
 
 	v586_example_top u_dut (
 		.clk             (clk),
@@ -138,7 +142,10 @@ module v586_tb_top (
 		.int_pic         (1'b0),
 		.iack            (iack),
 		.ivect           (8'h0),
-		.debug           (debug)
+		.debug           (debug),
+
+		.dbg_useq_ptr    (useq_ptr),
+		.dbg_pc_out      (pc_out)
 	);
 
 	axi_sim_mem #(
@@ -200,5 +207,7 @@ module v586_tb_top (
 	assign mon_m00_AWVALID = m00_AXI_AWVALID;
 	assign mon_debug       = debug;
 	assign mon_iack        = iack;
+	assign mon_useq_ptr    = useq_ptr;
+	assign mon_pc_out      = pc_out;
 
 endmodule
