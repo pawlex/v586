@@ -23,19 +23,37 @@ there's no real peripheral behind it.
 
 ## Reset vector
 
-The first real run of this testbench (zero-filled ROM, no real code)
-showed the core issuing a steady, unbroken sequence of code-fetch bursts
-starting at physical address **0xFFC00**, incrementing by 0x10 (one
-128-bit fetch line) every 143 cycles, for the full run -- i.e. it was
-executing straight through the zero bytes (`0x00 0x00` decodes as
+**Confirmed: 0xFFC00.** First noticed empirically -- an early run against
+a zero-filled ROM showed the core issuing a steady, unbroken sequence of
+code-fetch bursts starting at physical address 0xFFC00 and incrementing
+by 0x10 (one 128-bit fetch line) every 143 cycles, i.e. executing
+straight through the zero bytes (`0x00 0x00` decodes as
 `ADD [bx+si], al`, a harmless 2-byte fall-through) rather than crashing
-or stalling. `0xFFC00`-`0xFFFFF` is exactly 1KB, matching
-`soc_rtl/axi_rom.v`'s original 1KB boot ROM size, so **0xFFC00** (top of
-the 1MB real-mode address space minus 1KB) looks like this core's actual
-reset fetch address -- not the classic 8086-style `0xFFFF0` originally
-assumed here. Still not confirmed against documentation (the manual
-isn't machine-readable in this environment), just inferred from observed
-behavior -- treat it as a working hypothesis, not a verified fact.
+or stalling.
+
+That was then confirmed directly from the gate-level netlist. In
+[`core_rtl/v586_useq.v`](../core_rtl/v586_useq.v) (the microsequencer /
+instruction-fetch address generator), the `iaddr[31:0]` output is built
+from 32 individual flip-flops (`addr_reg_0`..`addr_reg_31`, from line
+~4903), each an async-clear `notech_reg` (resets to 0) or async-set
+`notech_reg_set` (resets to 1) -- the choice of primitive per bit *is*
+the reset constant:
+
+| Bits | Primitive | Reset value |
+|---|---|---|
+| `[9:0]`   | `notech_reg`     | `0000000000` |
+| `[19:10]` | `notech_reg_set` | `1111111111` |
+| `[31:20]` | `notech_reg`     | `0` |
+
+`0000_0000_0000_1111_1111_1100_0000_0000` = `0x000FFC00`, exactly
+matching what the simulation converged on. (The `CD`/`SD` reset net
+traced back to the module's general reset distribution -- it also resets
+unrelated registers like `purge_cnt`/`purge`/`queue_reg_*` -- so this is
+the real power-on reset value, not a coincidental read of some other
+control signal.) `0xFFC00`-`0xFFFFF` is exactly 1KB, matching
+`soc_rtl/axi_rom.v`'s original 1KB boot ROM size -- so the board-level
+boot ROM was always meant to sit there, not at the classic 8086-style
+`0xFFFF0` this testbench originally assumed.
 
 ## Boot image
 
