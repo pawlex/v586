@@ -87,7 +87,23 @@ module v586_example_top (
 	output wire        iack,
 	input  wire [7:0]  ivect,
 
-	output wire [4:0]  debug
+	output wire [4:0]  debug,
+
+	// Debug/trace-only outputs (added for simulation observability, not
+	// part of v586's original interface) -- useq_ptr (deco's prefetch-
+	// queue consume pointer) and pc_out (cpu's committed PC, fed back
+	// into useq's pc_in -- the closest thing to a real instruction
+	// pointer this core exposes internally).
+	output wire [3:0]  dbg_useq_ptr,
+	output wire [31:0] dbg_pc_out,
+
+	// writeio_req/writeio_data -- internal handshake between core and
+	// biu32_axi (core requests an I/O write; biu32_axi translates it to
+	// a real m01_AXI transaction). Exposed to check whether the gap
+	// between "instruction retired" and "external bus write" is inside
+	// biu32_axi's translation, or upstream of this signal entirely.
+	output wire        dbg_writeio_req,
+	output wire [31:0] dbg_writeio_data
 );
 
 	v586 u_v586 (
@@ -145,7 +161,13 @@ module v586_example_top (
 		.int_pic         (int_pic),
 		.iack            (iack),
 		.ivect           (ivect),
-		.debug           (debug)
+		.debug           (debug),
+
+		.dbg_useq_ptr    (dbg_useq_ptr),
+		.dbg_pc_out      (dbg_pc_out),
+
+		.dbg_writeio_req  (dbg_writeio_req),
+		.dbg_writeio_data (dbg_writeio_data)
 	);
 
 endmodule

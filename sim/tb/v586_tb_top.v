@@ -29,7 +29,23 @@ module v586_tb_top (
 	output wire [31:0] mon_m00_AWADDR,
 	output wire        mon_m00_AWVALID,
 	output wire [4:0]  mon_debug,
-	output wire        mon_iack
+	output wire        mon_iack,
+	output wire [3:0]  mon_useq_ptr,
+	output wire [31:0] mon_pc_out,
+
+	// I/O-space write logging (m01_AXI, via axi_io_stub.v)
+	output wire        mon_io_wr_valid,
+	output wire [31:0] mon_io_waddr,
+	output wire [31:0] mon_io_wdata,
+
+	// RAM write logging (m00_AXI, via axi_sim_mem.v)
+	output wire        mon_ram_wr_valid,
+	output wire [31:0] mon_ram_waddr,
+	output wire [31:0] mon_ram_wdata,
+
+	// core<->biu32_axi internal I/O-write handshake (see v586_top.v)
+	output wire        mon_writeio_req,
+	output wire [31:0] mon_writeio_data
 );
 
 	wire [31:0] m00_AXI_AWADDR;
@@ -82,6 +98,8 @@ module v586_tb_top (
 
 	wire        iack;
 	wire [4:0]  debug;
+	wire [3:0]  useq_ptr;
+	wire [31:0] pc_out;
 
 	v586_example_top u_dut (
 		.clk             (clk),
@@ -138,14 +156,21 @@ module v586_tb_top (
 		.int_pic         (1'b0),
 		.iack            (iack),
 		.ivect           (8'h0),
-		.debug           (debug)
+		.debug           (debug),
+
+		.dbg_useq_ptr    (useq_ptr),
+		.dbg_pc_out      (pc_out),
+
+		.dbg_writeio_req  (mon_writeio_req),
+		.dbg_writeio_data (mon_writeio_data)
 	);
 
 	axi_sim_mem #(
 		.RAM_BYTES (32'h000A_0000),
 		.ROM_BASE  (32'h000E_0000),
 		.ROM_BYTES (32'h0002_0000),
-		.ROM_FILE  ("rom/boot.hex")
+		.ROM_FILE  ("rom/boot.hex"),
+		.SHADOW_BASE (32'hFFFE_0000)
 	) u_mem (
 		.clk          (clk),
 		.rstn         (rstn),
@@ -167,7 +192,11 @@ module v586_tb_top (
 		.axi_RDATA    (m00_AXI_RDATA),
 		.axi_RVALID   (m00_AXI_RVALID),
 		.axi_RREADY   (m00_AXI_RREADY),
-		.axi_RLAST    (m00_AXI_RLAST)
+		.axi_RLAST    (m00_AXI_RLAST),
+
+		.dbg_ram_wr_valid (mon_ram_wr_valid),
+		.dbg_ram_waddr    (mon_ram_waddr),
+		.dbg_ram_wdata    (mon_ram_wdata)
 	);
 
 	axi_io_stub u_io (
@@ -189,7 +218,11 @@ module v586_tb_top (
 		.axi_RDATA    (m01_AXI_RDATA),
 		.axi_RVALID   (m01_AXI_RVALID),
 		.axi_RREADY   (m01_AXI_RREADY),
-		.axi_RLAST    (m01_AXI_RLAST)
+		.axi_RLAST    (m01_AXI_RLAST),
+
+		.dbg_io_wr_valid (mon_io_wr_valid),
+		.dbg_io_waddr    (mon_io_waddr),
+		.dbg_io_wdata    (mon_io_wdata)
 	);
 
 	assign mon_m00_ARADDR  = m00_AXI_ARADDR;
@@ -200,5 +233,7 @@ module v586_tb_top (
 	assign mon_m00_AWVALID = m00_AXI_AWVALID;
 	assign mon_debug       = debug;
 	assign mon_iack        = iack;
+	assign mon_useq_ptr    = useq_ptr;
+	assign mon_pc_out      = pc_out;
 
 endmodule

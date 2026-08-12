@@ -1,0 +1,59 @@
+[*]
+[*] GTKWave save file for the v586 Verilator testbench.
+[*] Open with: gtkwave -a waves.gtkw v586_tb.vcd
+[*] (or `make waves`, which runs a traced sim and opens this automatically)
+[*]
+[dumpfile] "v586_tb.vcd"
+[savefile] "waves.gtkw"
+[timestart] 0
+[size] 1600 1000
+[pos] -1 -1
+[sst_width] 300
+[signals_width] 320
+[sst_expanded] 1
+[sst_vpaned_height] 250
+
+-Testbench monitor ports (sim/tb/v586_tb_top.v)
+@28
+TOP.v586_tb_top.clk
+TOP.v586_tb_top.rstn
+@22
+TOP.v586_tb_top.mon_m00_ARADDR[31:0]
+@28
+TOP.v586_tb_top.mon_m00_ARVALID
+TOP.v586_tb_top.mon_m00_ARREADY
+@22
+TOP.v586_tb_top.mon_m00_AWADDR[31:0]
+@28
+TOP.v586_tb_top.mon_m00_AWVALID
+@22
+TOP.v586_tb_top.mon_pc_out[31:0]
+TOP.v586_tb_top.mon_useq_ptr[3:0]
+@28
+TOP.v586_tb_top.mon_iack
+@22
+TOP.v586_tb_top.mon_debug[4:0]
+@28
+TOP.v586_tb_top.mon_io_wr_valid
+@22
+TOP.v586_tb_top.mon_io_waddr[31:0]
+TOP.v586_tb_top.mon_io_wdata[31:0]
+
+-useq internals (core_rtl/v586_useq.v) -- reset-vector / purge investigation
+@22
+TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.iaddr[31:0]
+@28
+TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.purge
+@22
+TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.purge_cnt[10:0]
+@28
+TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.code_req
+TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.code_ack
+
+-code_addr at core and biu32_axi (post-Itlb-translation physical address)
+@22
+TOP.v586_tb_top.u_dut.u_v586.ucore.code_addr[31:0]
+TOP.v586_tb_top.u_dut.u_v586.ubiu.code_addr[31:0]
+
+[pattern_trace] 1
+[pattern_trace] 0

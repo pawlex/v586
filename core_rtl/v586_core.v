@@ -14,7 +14,8 @@ module core(clk, rstn, ivect, int_main, iack, code_addr, code_data, code_req, co
 		, code_wreq, code_wack, code_wdata, readio_data, io_add, writeio_data
 		, writeio_req, readio_req, writeio_ack, readio_ack, write_req, write_ack
 		, write_data, write_sz, read_sz, write_msk, read_req, read_ack, read_data
-		, Daddr, busy_ram, ipg_fault, outstanding);
+		, Daddr, busy_ram, ipg_fault, outstanding
+		, dbg_useq_ptr, dbg_pc_out);
 
 	input clk;
 	input rstn;
@@ -48,9 +49,13 @@ module core(clk, rstn, ivect, int_main, iack, code_addr, code_data, code_req, co
 	input busy_ram;
 	output ipg_fault;
 	output outstanding;
+	output [3:0] dbg_useq_ptr;
+	output [31:0] dbg_pc_out;
 
 	wire [31:0] pc_out;
 	wire [3:0] useq_ptr;
+	assign dbg_useq_ptr = useq_ptr;
+	assign dbg_pc_out = pc_out;
 	wire [5:0] valid_len;
 	wire [31:0] icr2;
 	wire [31:0] cr2;

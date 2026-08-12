@@ -7,6 +7,7 @@
 #   make run            - build (if needed) and run, no trace
 #   make run TRACE=1    - build and run with a VCD trace (sim/v586_tb.vcd)
 #   make run CYCLES=N   - override the cycle count (default 20000)
+#   make run IO_PORT=N  - log writes to a different I/O port (default 0x80)
 #   make waves          - run with TRACE=1 then open GTKWave on the result
 #   make clean          - remove build output and traces
 #
@@ -48,11 +49,12 @@ TOP    := v586_tb_top
 OBJDIR := obj_dir
 BIN    := $(OBJDIR)/V$(TOP)
 
-CYCLES ?= 20000
-TRACE  ?=
-JOBS   ?= 2
+CYCLES  ?= 20000
+TRACE   ?=
+JOBS    ?= 2
+IO_PORT ?= 0x80
 
-RUN_ARGS := --cycles=$(CYCLES)
+RUN_ARGS := --cycles=$(CYCLES) --io-port=$(IO_PORT)
 ifeq ($(TRACE),1)
 RUN_ARGS += --trace=v586_tb.vcd
 endif
@@ -80,7 +82,7 @@ run: $(BIN)
 
 waves: TRACE := 1
 waves: run
-	gtkwave v586_tb.vcd &
+	gtkwave -a waves.gtkw v586_tb.vcd &
 
 clean:
 	rm -rf $(OBJDIR) v586_tb.vcd
