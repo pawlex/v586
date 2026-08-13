@@ -83,6 +83,43 @@ never loads a segment register at all (zero `8E` opcodes in the image).
 The design is used flat by its own firmware. It simply is not an x86 in
 the sense DOS requires.
 
+### Why this isn't practically fixable
+
+In principle the gap is an ordinary design change: add segment-base
+addition to the address path and give the segment registers somewhere to
+feed. **If this core shipped as behavioral RTL, that would be tractable
+work** — a bounded change to a known part of the datapath, with the
+testbench here to verify it.
+
+It doesn't. Every block that would have to change is delivered as a
+synthesized gate-level netlist, with no surviving behavioral structure —
+identifiers like `n_36919`, ~74k lines total:
+
+| block | file | form |
+|---|---|---|
+| `useq` — code-path address generation | `core_rtl/v586_useq.v` | netlist |
+| `Dtlb` — data-path translation | `core_rtl/v586_dtlb.v` | netlist |
+| `vliw` — execution datapath | `core_rtl/v586_vliw.v` | netlist |
+
+The readable behavioral files (`acu.v`, `arithbox.v`, `datacache.v`,
+`realign.v`, `shiftbox.v`, `synthetic_op.v`) are all peripheral to this.
+`acu.v` is the closest tease: it's the address-calculation unit and it
+*is* readable — but it only computes the effective address
+(base + index + displacement) and emits a 3-bit `seg_src` naming which
+segment register to use. It never adds a segment base. The part you'd
+need to modify is downstream, in the netlist.
+
+Adding a functional unit to a synthesized netlist means reconstructing
+the surrounding logic well enough to splice into it correctly, then
+re-verifying a core you don't have a golden model for. That's a
+reverse-engineering project in its own right, not a patch — and the
+payoff would be a core that still needs every other x86 behavior
+validated from scratch (flags, BCD, string ops, interrupts, prefixes,
+protected mode). Proven open cores like ao486 already clear that bar.
+
+So this is a **won't-fix, not a can't-understand**. The behavior is fully
+characterized and reproducible; it just isn't worth the surgery.
+
 ### Integration defects found
 
 Both are in hand-written wrapper RTL, not the netlist, and both will bite
