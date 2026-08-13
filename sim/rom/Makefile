@@ -40,6 +40,7 @@ $(HEXOUT): $(OUTPUT)
 # Same two steps as above, as pattern rules for the test payloads.
 %.bin: %.asm
 	$(NASM) $(FLAGS) $< -o $@
+	ndisasm ./boot.bin | grep -v "90                nop"
 
 %.hex: %.bin
 	od -An -v -tx1 $< | tr -s ' ' '\n' | grep -v '^$$' > $@
@@ -52,3 +53,6 @@ clean:
 	rm -f $(OUTPUT) $(HEXOUT) $(TEST_BINS) $(TEST_HEXS)
 
 .PHONY: all clean
+
+sim:
+	$(MAKE) -C .. verilate run

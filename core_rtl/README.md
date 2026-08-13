@@ -1,10 +1,16 @@
-# core_rtl -- module map and open investigation
+# core_rtl -- module map and investigation log
 
 This document indexes the module hierarchy under `core_rtl/` (see the
 top-level [`README`](../README) for how the files here relate to the
-original monolithic `v586.v`), and tracks the state of an ongoing
+original monolithic `v586.v`), and carries the log of a
 reverse-engineering investigation into the core's reset/boot behavior
 (carried out via the Verilator testbench in [`../sim/`](../sim/)).
+
+**That investigation is now resolved** -- and two of its headline
+conclusions were wrong. Start at "Investigation: RESOLVED" below; the log
+that follows it is kept in chronological order and still contains the
+superseded claims. For the compatibility bottom line, see the top-level
+[`../README.md`](../README.md).
 
 ## Functional block diagram
 
@@ -86,7 +92,26 @@ see `v586_core.v`/`v586_top.v`) expose `deco`'s `useq_ptr` and `cpu`'s
 [`../sim/README.md`](../sim/README.md) for why those were added and what
 they've shown so far.
 
-## Open investigation: reset vector / boot-time execution pointer
+## Investigation: RESOLVED
+
+> **Read this before the log below.** The investigation is closed, and two
+> of its headline conclusions turned out to be **wrong**. The running log
+> is kept in chronological order for provenance, so entries below still
+> contain the superseded claims. Corrections:
+>
+> 1. **"The core never retires an instruction" is FALSE.** It executes
+>    correctly. Two defects outside the core produced that appearance: the
+>    monitor compared a raw bus address against an I/O port number (I/O is
+>    word-addressed, `port = addr>>2`), and `v586_top.v` never drives
+>    `m01_AXI_BREADY`, deadlocking the I/O bus after exactly one write.
+> 2. **"The fetch address encodes `{CS,IP}` as `CS<<16|IP`" is FALSE.** It
+>    was an artifact of the 16-bit `EA` encoding. `EA` on this core takes a
+>    flat 32-bit absolute target and ignores the selector entirely.
+>
+> The real finding: **this core has no segmentation at all**, in either
+> mode, which is why it cannot run real-mode x86 software. See
+> "Resolution" at the end of this section, and the top-level
+> [`../README.md`](../README.md) for the compatibility summary.
 
 Summary of where this stands (full detail and running log of evidence in
 [`../sim/README.md`](../sim/README.md)):
@@ -276,25 +301,86 @@ Summary of where this stands (full detail and running log of evidence in
   instruction. Expectations are now per-test flags instead of baked-in
   assumptions.
 
-### TODO / next steps
+### Resolution
 
-1. **Find `vliw`'s actual decode-to-execute dispatch signals** (what
-   triggers a micro-op to actually run, as opposed to just being scanned
-   for length) and trace those directly instead of inferring from
-   `pc_out`/bus activity. This is now the central open question --
-   everything downstream (`biu32_axi`, `core`, renaming) has been ruled
-   out, and both "just run the current loop longer" (2M cycles, no
-   change) and "maybe it's a closed-loop artifact" (non-looping
-   ~126KiB sled, 2M cycles, still no change -- see above) have been
-   tried and ruled out.
-2. **Trace `deco`'s `in128` input** (the 128-bit instruction window it
-   decodes from, sourced from `useq.squeue`) alongside `dbg_pc_out`, to
-   get ground truth on what bytes the decoder actually has at a given
-   moment, rather than inferring from PC position or landing addresses.
-   Requires threading a new debug port through
-   `deco` -> `cpu` -> `core` -> `v586` -> `example/v586_example_top.v` ->
-   `sim/tb/v586_tb_top.v`, same pattern as `dbg_useq_ptr`/`dbg_pc_out`.
-3. **Finish tracing `n_61436`'s driver** in `v586_useq.v`, to fully close
-   out when/whether `purge` actually completes. Lower priority given the
-   evidence it may not be on the critical path for the execution-pointer
-   question, but still an open thread.
+The three defects that made the core look non-functional, in the order
+they were found:
+
+**1. I/O ports are word-addressed on the bus.** `OUT 0x80, AX` appears on
+`m01_AXI` at byte address `0x200`; `OUT DX,EAX` with `DX=0x3F8` at
+`0xFE0`. Two well-separated values, both exactly `port<<2`. The monitor
+compared the raw bus address against the port number, so
+`IO writes to port 0x80` was structurally incapable of ever incrementing.
+Decode is now `port = (addr >> 2) & 0x3FF` (the mask is the classic
+10-bit ISA decode) in `sim/cpp/sim_main.cpp`, which also prints the raw
+bus address so a wrong assumption cannot hide again.
+
+**2. `m01_AXI_BREADY` is never driven.** It appears only in
+`v586_top.v`'s port list and declaration; the memory-port equivalent
+*is* tied high (`assign m00_AXI_BREADY = 1'b1;`, line 92). The I/O
+write-response channel therefore never completes, the stub's
+`aw_seen`/`w_seen` never clear, and the bus deadlocks after **exactly one
+I/O write** -- which capped every run ever done, regardless of program.
+Present in the original monolithic `v586.v` (checked against git
+history), so it was not introduced by the module split. The testbench
+supplies the acknowledge itself via a bounded random-delay generator; the
+DUT is untouched.
+
+With both fixed, the core ran a `MOV AX,CX` / `OUT 0x80,AX` / `LOOP`
+program for 70,000+ I/O writes over 57 ms of simulated time, `CX`
+counting down monotonically one decrement per iteration. The retirement
+question is closed: **the core executes.**
+
+**3. `CS<<16|IP` was an artifact** -- see the banner at the top of this
+section. `EA` reads the four bytes following the opcode as a flat 32-bit
+absolute target and discards the selector. Every earlier "confirmation"
+used the 16-bit encoding, whose operand bytes `[off16][sel16]` read as a
+little-endian dword are bit-identical to `sel<<16|off`. The 32-bit
+encoding separates them: `jmp 0xBEEF:0x00123456` lands at `0x00123456`.
+
+### The actual finding: no segmentation
+
+Segment registers are loadable and readable (`8E D8` writes `DS`,
+`8C D8` reads it back correctly) but contribute **nothing** to address
+generation, in either mode:
+
+| `CR0.PE` | `DS` | access | landed at | real x86 |
+|---|---|---|---|---|
+| 0 | untouched | `mov [0x3000]` | `0x00003000` | `0x00003000` |
+| 0 | `0x0008` | `mov [0x100]` | `0x00000100` | `0x00000180` |
+| 0 | `0x0100` | `mov [0x0]` | `0x00000000` | `0x00001000` |
+| 1 | `0x0100` | `mov [0x0]` | `0x00000000` | `0x00001000` |
+
+Protected mode was confirmed active by reading `CR0` back (`0x00000001`).
+There is also **no descriptor machinery**: loading `DS=0x0100` with
+`GDTR` uninitialised is a guaranteed `#GP` on real x86, and it did not
+fault here -- so no descriptor lookup and no limit check occur, and
+`LGDT` would have nothing to feed.
+
+Consequence: no `selector<<4` path exists anywhere, in any mode, so real
+mode, unreal/"big real" mode and virtual-8086 are all impossible. See
+[`../README.md`](../README.md) for the full compatibility write-up.
+
+These findings are frozen as regression tests in `sim/rom/tests/`
+(`far_jump_absolute`, `io_write_retires`, `no_segmentation`), runnable
+with `make test` from `sim/`.
+
+### Remaining threads (low priority)
+
+The execution-pointer question that drove this investigation is answered,
+so these are curiosities rather than blockers:
+
+1. **`writeio_data`'s upper half carries prefetch residue** -- the low 16
+   bits hold the correct value, the upper 16 hold recently-fetched
+   instruction bytes (e.g. `0xC889` = `89 C8` = `MOV AX,CX`).
+2. **Back-to-back `OUT`s can be dropped.** A probe issuing five `OUT`s in
+   quick succession produced one bus write; the looped version with
+   cycles between them produced one per iteration. Suspect spacing or a
+   busy/backpressure path.
+3. **Port and data can be misaligned by one instruction** -- a write to
+   port `0x3F8` carried the *previous* `OUT`'s value.
+4. **`purge`/`purge_cnt` completion** (`n_61436`'s driver in
+   `v586_useq.v`) was never traced. It was deprioritised on the grounds
+   that it does not gate `pc_out`; that reasoning only ever covered the
+   front end, but since retirement is now known to work, it no longer
+   matters much either way.

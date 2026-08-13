@@ -73,7 +73,7 @@ Variables (all overridable on the command line, e.g. `make run CYCLES=1000`):
 | `CYCLES`    | `20000`        | Clock cycles to simulate.                                   |
 | `TRACE`     | unset          | `TRACE=1` writes a VCD to `$(VCD)`.                         |
 | `QUIET`     | unset          | `QUIET=1` passes `--quiet`: run summary only, no per-event lines. |
-| `IO_PORT`   | `0x80`         | I/O port whose writes get logged.                           |
+| `IO_PORT`   | `0x80`         | x86 I/O port whose writes get logged (decoded, not a raw bus address -- see below). |
 | `JOBS`      | `4`            | C++ build parallelism -- a RAM ceiling, see below.          |
 | `VCD`       | `v586_tb.vcd`  | Trace filename, read by `waves`/`view`/`clean`.             |
 | `GTKW`      | `waves.gtkw`   | Saved GTKWave signal layout applied by `waves`/`view`.      |
@@ -108,8 +108,9 @@ test is one self-describing `.asm`: the program and the expectations
 about it live in the same file, so there's no manifest to keep in sync.
 
 ```
-PASS   cs_ip_encoding         [fetch] far jump target uses CS<<16|IP, not real-mode CS*16+IP
-XFAIL  io_marker_retires      [retire] out 0x80,ax at the reset vector produces a real IO write
+PASS   far_jump_absolute      [fetch] EA jumps to a flat 32-bit target; the selector is ignored
+PASS   io_write_retires       [retire] OUT retires and reaches m01_AXI with correct data
+PASS   no_segmentation        [fetch] DS contributes nothing to the computed address
 ```
 
 All tests share **one compiled model**. The ROM is selected at runtime
@@ -118,30 +119,31 @@ an assemble, not a ~3-minute re-elaboration. You can drive it by hand
 too:
 
 ```sh
-./obj_dir/Vv586_tb_top +rom=rom/tests/cs_ip_encoding.hex --cycles=400 \
-    --expect-pc=0x000E1234 --expect-not-pc=0x0000F314
+./obj_dir/Vv586_tb_top +rom=rom/tests/far_jump_absolute.hex --cycles=300 \
+    --expect-pc=0x00123456 --expect-not-pc=0xBF013456
 ```
 
 ### `fetch` vs `retire` -- the distinction that matters
 
-Every test declares a `CLASS`, and it is the most important field in the
-file:
+Every test declares a `CLASS`:
 
-- **`fetch`** asserts where the fetch/PC pointer goes. These pass today.
+- **`fetch`** asserts where the fetch/PC pointer goes.
 - **`retire`** asserts that an instruction produced a real bus side
-  effect (an IO write, a RAM store, a `writeio_req` pulse). These are
-  marked `XFAIL` -- they encode the central open question from
-  [`../core_rtl/README.md`](../core_rtl/README.md), not a regression.
+  effect (an I/O write, a RAM store, a `writeio_req` pulse).
 
-Conflating the two is the single most expensive mistake made in this
-investigation: `pc_out` advancing correctly past an instruction is **not**
-evidence that it executed. Keep a test's assertions consistent with its
-class, and never "fix" a red `retire` test by weakening it into a `fetch`
+`pc_out` advancing correctly past an instruction is **not** evidence that
+it executed -- a prefetch path can parse instruction boundaries without
+retiring anything. Conflating the two cost this investigation a great
+deal of time. Keep a test's assertions consistent with its class, and
+never "fix" a red `retire` test by weakening it into a `fetch`
 assertion -- that would delete the finding.
 
-An `XFAIL` that starts passing is reported as **XPASS** and fails the
-suite deliberately, with a banner. That is the signal the retirement
-investigation is waiting for, and it must not scroll past unnoticed.
+The suite also supports `XFAIL:` for behaviour that is expected to fail.
+Nothing uses it at present: the retirement question that motivated it is
+resolved (see [`../core_rtl/README.md`](../core_rtl/README.md)), and
+`io_write_retires` now passes. An `XFAIL` that starts passing is reported
+as **XPASS** and deliberately fails the suite with a banner, so a
+resolved-but-unnoticed open question cannot scroll past.
 
 ### Adding a test
 
@@ -195,9 +197,11 @@ since fetch/prefetch traffic isn't evidence of real execution):
 - `RAM WRITE addr 0xXXXXXXXX <= 0xXXXXXXXX` on every real write to the
   RAM region seen on `m00_AXI` (`axi_sim_mem.v`'s
   `dbg_ram_wr_valid`/`waddr`/`wdata`).
-- `IO WRITE port 0xXX <= 0xXX` on every write to `IO_PORT` (default
-  `0x80`, the classic PC "POST code" debug port) seen on `m01_AXI`
-  (`axi_io_stub.v`'s `dbg_io_wr_valid`/`waddr`/`wdata`).
+- `IO WRITE port 0xXXX <= 0xXXXX (m01_AXI addr 0x..., data 0x...)` on
+  every write to `IO_PORT` (default `0x80`, the classic PC "POST code"
+  debug port) seen on `m01_AXI` (`axi_io_stub.v`'s
+  `dbg_io_wr_valid`/`waddr`/`wdata`). See "I/O port decode" below for why
+  the raw bus address is printed alongside the decoded port.
 
 All three are suppressed by `--quiet`/`QUIET=1`, and all three get a
 count in the run summary regardless. There's also a fourth debug signal,
@@ -303,6 +307,50 @@ grep -E '^\s*\$var' v586_tb.vcd | grep <signal_name>
 (the scope nesting shown by `$scope`/`$upscope` lines above a `$var`
 line gives the full dotted path, e.g.
 `TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.purge`).
+
+## I/O port decode
+
+The core **word-addresses** I/O space: `OUT 0x80, AX` appears on
+`m01_AXI` at byte address `0x200`, and `OUT DX,EAX` with `DX=0x3F8` at
+`0xFE0`. `IO_PORT` therefore names an x86 port and `sim_main.cpp` decodes
+the bus address before matching:
+
+```c
+port = (bus_addr >> 2) & 0x3FF;
+```
+
+The `0x3FF` mask is the classic 10-bit ISA decode -- period hardware
+decoded only the low 10 address lines, so ports alias every `0x400` and
+`IO_PORT=0x7F8` matches `0x3F8`.
+
+This mattered: the original code compared the **raw bus address** against
+the port number, so `IO writes to port 0x80` could never increment no
+matter what the core did. Combined with the `BREADY` defect below, that
+produced years-shaped evidence for "this core never retires an
+instruction," which turned out to be false. The raw `m01_AXI` address is
+now printed alongside the decoded port precisely so a wrong assumption
+here cannot hide again -- `IO_ADDR_SHIFT` is inferred from observed
+mappings, not from a datasheet.
+
+## `m01_AXI_BREADY` -- a DUT defect the testbench works around
+
+`core_rtl/v586_top.v` declares `m01_AXI_BREADY` as an output but **never
+drives it**. It appears only in the port list and the declaration; the
+memory port's equivalent *is* driven (`assign m00_AXI_BREADY = 1'b1;`,
+line 92). It is absent from the original monolithic `v586.v` too, so the
+module split did not cause it.
+
+Consequence: the I/O write-response channel never completes, the stub's
+`aw_seen`/`w_seen` never clear, and the bus **deadlocks after exactly one
+I/O write** -- capping every run regardless of the program.
+
+The DUT is deliberately left untouched. `tb/v586_tb_top.v` generates the
+acknowledge itself (`tb_io_bready`) after a **bounded random delay**:
+random so no test can come to depend on a fixed write-response latency
+and so the core's tolerance of a slow peripheral gets exercised, bounded
+so runs always make progress, and seeded so results stay reproducible.
+Override the seed with `+bready_seed=<n>`. `m01_AXI_BREADY` remains wired
+to the (undriven) DUT output so it stays visible in traces.
 
 ## Clock and timescale
 

@@ -58,6 +58,28 @@ struct Expect {
 // so a multi-million-cycle run can't drift.
 static const uint64_t CLK_PERIOD_PS = 30303;
 
+// ---- I/O port decode -------------------------------------------------
+// The core word-addresses I/O space: `OUT 0x80, AX` appears on m01_AXI at
+// byte address 0x200 (= 0x80 << 2). Matching the raw bus address against
+// the port number therefore never fired, which is why every earlier run
+// reported "IO writes to port 0x80 : 0" -- a measurement bug that would
+// have masked a real write even when the core performed one.
+//
+// IO_PORT_MASK is the classic 10-bit ISA decode: period PC hardware only
+// decoded the low 10 address lines, so ports alias every 0x400 (0x480 is
+// the same device as 0x80). Applied to both sides of the comparison.
+//
+// CAUTION: the shift is inferred from a single observed mapping
+// (0x80 -> 0x200). The raw bus address is printed alongside the decoded
+// port so a wrong assumption here stays visible rather than silently
+// re-creating the same class of bug.
+static const unsigned IO_ADDR_SHIFT = 2;
+static const uint32_t IO_PORT_MASK  = 0x3FF;
+
+static uint32_t io_bus_addr_to_port(uint32_t bus_addr) {
+	return (bus_addr >> IO_ADDR_SHIFT) & IO_PORT_MASK;
+}
+
 static vluint64_t g_time = 0;
 
 double sc_time_stamp() { return static_cast<double>(g_time); }
@@ -231,12 +253,19 @@ int main(int argc, char **argv) {
 		}
 		last_writeio_req = top->mon_writeio_req;
 
-		if (top->rstn && top->mon_io_wr_valid && top->mon_io_waddr == io_watch_port) {
-			io_watch_port_writes++;
-			if (!quiet) {
-				printf("[cycle %6llu] IO WRITE port 0x%02x <= 0x%02x\n",
-				       static_cast<unsigned long long>(cycle), io_watch_port,
-				       top->mon_io_wdata & 0xFF);
+		if (top->rstn && top->mon_io_wr_valid) {
+			const uint32_t port = io_bus_addr_to_port(top->mon_io_waddr);
+			if (port == (io_watch_port & IO_PORT_MASK)) {
+				io_watch_port_writes++;
+				if (!quiet) {
+					// Raw bus address included deliberately -- see the
+					// IO_ADDR_SHIFT note above.
+					printf("[cycle %6llu] IO WRITE port 0x%03x <= 0x%04x "
+					       "(m01_AXI addr 0x%08x, data 0x%08x)\n",
+					       static_cast<unsigned long long>(cycle), port,
+					       top->mon_io_wdata & 0xFFFF,
+					       top->mon_io_waddr, top->mon_io_wdata);
+				}
 			}
 		}
 
@@ -266,7 +295,7 @@ int main(int argc, char **argv) {
 	       last_pc_out, static_cast<unsigned long long>(cycles_since_pc_out_change));
 	printf("final debug[4:0]         : 0x%x\n", top->mon_debug);
 	printf("RAM writes               : %llu\n", static_cast<unsigned long long>(ram_writes));
-	printf("IO writes to port 0x%02x  : %llu\n", io_watch_port,
+	printf("IO writes to port 0x%03x : %llu\n", io_watch_port & IO_PORT_MASK,
 	       static_cast<unsigned long long>(io_watch_port_writes));
 	printf("writeio_req pulses       : %llu\n", static_cast<unsigned long long>(writeio_req_pulses));
 	if (trace_on) printf("trace written to        : %s\n", vcd_path.c_str());
@@ -309,8 +338,8 @@ int main(int argc, char **argv) {
 	if (have_expect_io) {
 		const bool ok = (io_watch_port_writes == expect_io);
 		if (!ok) failures++;
-		printf("[%s] IO writes to port 0x%02x == %llu (got %llu)\n",
-		       ok ? "PASS" : "FAIL", io_watch_port,
+		printf("[%s] IO writes to port 0x%03x == %llu (got %llu)\n",
+		       ok ? "PASS" : "FAIL", io_watch_port & IO_PORT_MASK,
 		       static_cast<unsigned long long>(expect_io),
 		       static_cast<unsigned long long>(io_watch_port_writes));
 	}

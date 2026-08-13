@@ -5,7 +5,7 @@
 // wrapper around core_rtl's v586 module) and backs its two AXI4 master
 // ports with simulation-only memory models:
 //
-//   m00_AXI (code fetch + data) -> axi_sim_mem: RAM at 0x0-0x8FFF,
+//   m00_AXI (code fetch + data) -> axi_sim_mem: RAM at 0x0-0x9FFFF,
 //                                   ROM at 0xE0000-0xFFFFF (128KiB)
 //   m01_AXI (I/O space)         -> axi_io_stub: always-completing sink
 //
@@ -94,7 +94,81 @@ module v586_tb_top (
 	wire        m01_AXI_RREADY;
 	wire        m01_AXI_RLAST;
 	wire        m01_AXI_BVALID;
-	wire        m01_AXI_BREADY;
+	wire        m01_AXI_BREADY;   // driven by the DUT -- see note below
+
+	// ---- m01 (I/O) write-response acknowledge -------------------------
+	// The DUT declares m01_AXI_BREADY as an output but never drives it:
+	// it appears only in v586_top.v's port list and declaration, is
+	// assigned nowhere, and connects to no submodule. (The memory port's
+	// equivalent IS driven -- `assign m00_AXI_BREADY = 1'b1;` at
+	// v586_top.v:92 -- so this looks like an omission on the I/O port.)
+	//
+	// Consequence: the stub asserts BVALID, nobody accepts it, its
+	// aw_seen/w_seen never clear, and the I/O bus deadlocks after exactly
+	// ONE write. That is the freeze at pc_out=0xfe068 -- and it caps every
+	// run at a single I/O write no matter what the program does.
+	//
+	// The DUT is deliberately left untouched, so the testbench supplies
+	// the acknowledge instead. m01_AXI_BREADY above stays wired to the
+	// (undriven) DUT output purely so it remains visible in traces; the
+	// stub is fed from tb_io_bready below.
+	//
+	// The delay is RANDOM so that no test can quietly come to depend on a
+	// fixed write-response latency -- this also exercises the core's
+	// tolerance of a slow peripheral. It is BOUNDED so every run still
+	// makes forward progress, and SEEDED so the suite stays reproducible:
+	// override with +bready_seed=<n> to re-run with different timing.
+	localparam [3:0] IO_BRESP_MAX_DELAY = 4'd15;
+
+	reg [31:0] bresp_rng;
+	reg [31:0] bresp_seed_arg;
+	reg [3:0]  bresp_cnt;
+	reg        bresp_armed;
+	reg        tb_io_bready;
+
+	initial begin
+		if ($value$plusargs("bready_seed=%d", bresp_seed_arg))
+			bresp_rng = bresp_seed_arg;
+		else
+			bresp_rng = 32'h1234_5678;
+	end
+
+	// xorshift32 -- deterministic given the seed, and self-contained so
+	// the result does not depend on the simulator's $random implementation.
+	function [31:0] bresp_xorshift;
+		input [31:0] x;
+		begin
+			x = x ^ (x << 13);
+			x = x ^ (x >> 17);
+			x = x ^ (x << 5);
+			bresp_xorshift = x;
+		end
+	endfunction
+
+	always @(posedge clk or negedge rstn)
+	if (~rstn) begin
+		bresp_cnt    <= 4'd0;
+		bresp_armed  <= 1'b0;
+		tb_io_bready <= 1'b0;
+	end else begin
+		tb_io_bready <= 1'b0;
+		if (m01_AXI_BVALID) begin
+			if (!bresp_armed) begin
+				// Draw this response's delay when BVALID first asserts.
+				bresp_rng   <= bresp_xorshift(bresp_rng);
+				bresp_cnt   <= bresp_xorshift(bresp_rng) & IO_BRESP_MAX_DELAY;
+				bresp_armed <= 1'b1;
+			end else if (bresp_cnt != 4'd0) begin
+				bresp_cnt <= bresp_cnt - 4'd1;
+			end else begin
+				tb_io_bready <= 1'b1;   // one-cycle accept
+				bresp_armed  <= 1'b0;
+			end
+		end else begin
+			bresp_armed <= 1'b0;
+			bresp_cnt   <= 4'd0;
+		end
+	end
 
 	wire        iack;
 	wire [4:0]  debug;
@@ -211,7 +285,7 @@ module v586_tb_top (
 		.axi_WSTRB    (m01_AXI_WSTRB),
 		.axi_WLAST    (m01_AXI_WLAST),
 		.axi_BVALID   (m01_AXI_BVALID),
-		.axi_BREADY   (m01_AXI_BREADY),
+		.axi_BREADY   (tb_io_bready),   // NOT the DUT's undriven output
 		.axi_ARADDR   (m01_AXI_ARADDR),
 		.axi_ARVALID  (m01_AXI_ARVALID),
 		.axi_ARREADY  (m01_AXI_ARREADY),
