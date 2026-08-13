@@ -34,6 +34,19 @@
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 
+// Core input clock: 33 MHz. The Makefile builds with `--timescale
+// 1ns/1ps`, so simulation time (and every VCD dump timestamp, which is
+// passed in timeprecision units) is in picoseconds -- keep the two in
+// sync if either changes.
+//
+// 1/33MHz = 30303.0303... ps, which is not a whole picosecond. Rounding
+// to 30303 ps makes the modelled clock 33.000033 MHz (~1 ppm fast),
+// which is far below anything this testbench is used to measure. The
+// leftover 0.03 ps/cycle is still never accumulated: edge times below
+// are computed from the cycle index rather than by repeated addition,
+// so a multi-million-cycle run can't drift.
+static const uint64_t CLK_PERIOD_PS = 30303;
+
 static vluint64_t g_time = 0;
 
 double sc_time_stamp() { return static_cast<double>(g_time); }
@@ -101,19 +114,24 @@ int main(int argc, char **argv) {
 	const uint64_t reset_cycles = 10;
 
 	while (cycle < max_cycles) {
+		// Computed from the cycle index, not accumulated, so the sub-ps
+		// rounding in CLK_PERIOD_PS can't drift over a long run.
+		const uint64_t t_fall = cycle * CLK_PERIOD_PS;
+		const uint64_t t_rise = t_fall + CLK_PERIOD_PS / 2;
+
 		// Falling edge
 		top->clk = 0;
+		g_time = t_fall;
 		top->eval();
-		if (tfp) tfp->dump(g_time);
-		g_time++;
+		if (tfp) tfp->dump(t_fall);
 
 		if (cycle == reset_cycles) top->rstn = 1;
 
 		// Rising edge
 		top->clk = 1;
+		g_time = t_rise;
 		top->eval();
-		if (tfp) tfp->dump(g_time);
-		g_time++;
+		if (tfp) tfp->dump(t_rise);
 
 		// Tracked silently for the summary -- not printed per-event, since
 		// fetch/prefetch traffic can touch an address the CPU never
@@ -192,6 +210,9 @@ int main(int argc, char **argv) {
 
 	printf("\n---- v586_tb_top run summary ----\n");
 	printf("cycles run              : %llu\n", static_cast<unsigned long long>(max_cycles));
+	printf("simulated time          : %.3f us @ %.3f MHz\n",
+	       static_cast<double>(max_cycles) * CLK_PERIOD_PS / 1e6,
+	       1e6 / static_cast<double>(CLK_PERIOD_PS));
 	printf("m00_AXI AR beats seen    : %llu\n", static_cast<unsigned long long>(ar_transactions));
 	printf("last fetch address      : 0x%08x\n", last_araddr);
 	printf("dbg_pc_out changes seen  : %llu\n", static_cast<unsigned long long>(pc_out_changes));

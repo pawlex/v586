@@ -243,7 +243,10 @@ Summary of where this stands (full detail and running log of evidence in
   sled finished. A genuinely non-repeating ~126KiB run plus a long dwell
   at the end still shows no retirement, so this isn't a closed-loop
   artifact. The open question narrows fully to candidate (b) in the TODO
-  below.
+  below. (For scale: the testbench now models a 33 MHz core clock, so
+  2M cycles is ~60.6 ms of simulated wall-clock time -- see
+  `sim/README.md`'s "Clock and timescale". Real 586-class hardware would
+  have finished POST-ing in that window.)
 
 ### TODO / next steps
 

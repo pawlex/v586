@@ -46,6 +46,8 @@ make run CYCLES=200000      # override the cycle count
 make run TRACE=1            # also write v586_tb.vcd
 make run IO_PORT=0x3F8      # log writes to a different I/O port (default 0x80)
 make waves                  # run with trace, then open GTKWave with waves.gtkw loaded
+make view                   # open an existing v586_tb.vcd -- no re-run
+make view VCD=other.vcd     # ...or some other trace file
 make clean                  # remove build output and traces
 ```
 
@@ -80,16 +82,45 @@ trace point" below to add your own.
 sources, then runs it. Rebuilds happen automatically when any source file
 changes (standard Make dependency tracking).
 
-`JOBS` controls C++ build parallelism (default 2). The generated model is
-large (the gate-level netlist is ~74k lines); each parallel `g++` job can
-use well over 1GB of RAM. On a memory-constrained machine, raise it if
-you have RAM to spare, or drop to `JOBS=1` if the build gets OOM-killed
-(`g++: fatal error: Killed signal terminated program cc1plus` is the
-tell):
+`JOBS` controls C++ build parallelism. The generated model is large (the
+gate-level netlist is ~74k lines) and each parallel `g++` job can use
+well over 1GB of RAM, so treat this as a **RAM ceiling, not a core
+count** -- don't raise it to `nproc` without the memory to back it.
+Measured on the 8-core/5GB machine this was developed on, `-j 8` drove
+free memory to ~290MB with 8 `cc1plus` processes live and got
+OOM-killed; **`-j 3` is the tested-working value and the recommended
+one** (3:04 wall, 1.6GB peak RSS). The tell is:
+
+```
+g++: fatal error: Killed signal terminated program cc1plus
+```
+
+If you hit that, drop it:
 
 ```sh
-make run JOBS=1
+make run JOBS=3
 ```
+
+## Clock and timescale
+
+The core input clock is modelled at **33 MHz**. Verilator is invoked
+with `--timescale 1ns/1ps` (nothing in the RTL carries its own
+`` `timescale ``), so simulation time and every VCD timestamp are in
+picoseconds, and GTKWave shows a real time axis instead of the
+meaningless one you get from the 1ps/1ps default.
+
+33 MHz has a period of 30303.0303... ps, which is not a whole
+picosecond. `cpp/sim_main.cpp`'s `CLK_PERIOD_PS` rounds it to 30303 ps
+-- a modelled 33.000033 MHz, ~1 ppm fast, far below anything this
+testbench measures. That rounding is never accumulated: clock-edge
+times are computed from the cycle index (`cycle * CLK_PERIOD_PS`) rather
+than by repeated addition, so a multi-million-cycle run cannot drift.
+
+`CLK_PERIOD_PS` and the Makefile's `--timescale` precision have to stay
+in agreement -- VCD dump timestamps are passed in timeprecision units.
+The run summary reports simulated wall-clock time (e.g. `simulated time
+: 30.303 us @ 33.000 MHz`), which is the quick way to confirm both are
+still lined up.
 
 ### On a remote machine over SSH (no rsync available)
 
@@ -119,8 +150,20 @@ machines.
 [`waves.gtkw`](waves.gtkw) pre-loaded -- a saved signal layout covering
 the testbench's `mon_*` monitor ports plus the deeper internal
 useq/purge/code_addr signals this investigation has been tracing by hand
-via VCD parsing. To open it manually against a trace generated some
-other way:
+via VCD parsing.
+
+`make view` opens an already-generated trace with the same layout but
+*without* re-running the simulation -- use it to re-open the trace from
+a long run (a traced 2M-cycle run takes ~30s and writes a large VCD)
+rather than paying for it again, or to inspect a trace copied back from
+the remote build box:
+
+```sh
+make view                   # opens ./v586_tb.vcd
+make view VCD=path/to.vcd   # opens some other trace
+```
+
+Both are just wrappers around:
 
 ```sh
 gtkwave -a waves.gtkw v586_tb.vcd
