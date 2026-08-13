@@ -35,21 +35,87 @@ without wrapping. `rom/boot.asm` works around this by keeping all of
 its code within the mapped ROM window (`0xE0000`-`0xFFFFF`) rather than
 fixing it in the memory model (see below).
 
-## Building and running
+## Make targets
 
-### On this machine (Verilator already installed)
+Two makefiles: [`sim/Makefile`](Makefile) builds and runs the simulation,
+[`sim/rom/Makefile`](rom/Makefile) assembles the boot ROM. You rarely
+need the second one directly -- `make run` regenerates the ROM itself
+when `boot.asm` changes.
+
+### `sim/Makefile`
+
+| Target     | What it does                                                          |
+|------------|-----------------------------------------------------------------------|
+| `verilate` | Build `obj_dir/Vv586_tb_top` and stop. **This is what bare `make` does** -- there's no `all` target, and `verilate` is first. |
+| `run`      | Build if needed, re-assemble the ROM if `rom/boot.asm` changed, then run. |
+| `waves`    | `run` with `TRACE=1`, then open the result in GTKWave.                  |
+| `view`     | Open an **existing** VCD in GTKWave without re-running the sim.        |
+| `clean`    | Remove `obj_dir/` and the VCD. Leaves `rom/` alone.                    |
 
 ```sh
 cd sim
 make run                    # build (if needed) + run, 20000 cycles, no trace
 make run CYCLES=200000      # override the cycle count
 make run TRACE=1            # also write v586_tb.vcd
+make run QUIET=1            # summary only, no per-event lines
 make run IO_PORT=0x3F8      # log writes to a different I/O port (default 0x80)
 make waves                  # run with trace, then open GTKWave with waves.gtkw loaded
 make view                   # open an existing v586_tb.vcd -- no re-run
 make view VCD=other.vcd     # ...or some other trace file
 make clean                  # remove build output and traces
 ```
+
+Variables (all overridable on the command line, e.g. `make run CYCLES=1000`):
+
+| Variable    | Default        | Meaning                                                    |
+|-------------|----------------|------------------------------------------------------------|
+| `CYCLES`    | `20000`        | Clock cycles to simulate.                                   |
+| `TRACE`     | unset          | `TRACE=1` writes a VCD to `$(VCD)`.                         |
+| `QUIET`     | unset          | `QUIET=1` passes `--quiet`: run summary only, no per-event lines. |
+| `IO_PORT`   | `0x80`         | I/O port whose writes get logged.                           |
+| `JOBS`      | `4`            | C++ build parallelism -- a RAM ceiling, see below.          |
+| `VCD`       | `v586_tb.vcd`  | Trace filename, read by `waves`/`view`/`clean`.             |
+| `GTKW`      | `waves.gtkw`   | Saved GTKWave signal layout applied by `waves`/`view`.      |
+| `GTKWAVE`   | `gtkwave`      | GTKWave binary.                                             |
+| `VERILATOR` | `verilator`    | Verilator binary.                                           |
+| `NASM`      | `nasm`         | Assembler used when `run` re-generates the ROM.             |
+
+### `sim/rom/Makefile`
+
+| Target  | What it does                                                             |
+|---------|--------------------------------------------------------------------------|
+| `all`   | Default. `boot.asm` --(`nasm -f bin`)--> `boot.bin` --(`od`)--> `boot.hex`. |
+| `clean` | Delete `boot.bin` and `boot.hex`.                                        |
+
+| Variable | Default     | Meaning                                    |
+|----------|-------------|---------------------------------------------|
+| `NASM`   | `nasm`      | Assembler binary.                            |
+| `FLAGS`  | `-f bin`    | NASM flags -- flat binary, no object format. |
+| `SRC`    | `boot.asm`  | Source.                                      |
+| `OUTPUT` | `boot.bin`  | Flat 128KiB intermediate.                    |
+| `HEXOUT` | `boot.hex`  | `$readmemh` image the testbench loads.       |
+
+**Careful with `make -C rom clean`:** it deletes `boot.hex`, which is
+*committed* (so the sim runs on a fresh clone without needing `nasm`).
+Restore it with `make -C rom` if you have `nasm`, or
+`git checkout sim/rom/boot.hex` if you don't.
+
+### How the two fit together
+
+`rom/boot.hex` is read by `$readmemh` when the **simulation starts**,
+not when the model is compiled -- so it's a prerequisite of `run`, not
+of the Verilator build. `make run` therefore re-assembles the ROM when
+`rom/boot.asm` is newer, and *without* that dependency, editing
+`boot.asm` and re-running would silently simulate the previous ROM
+image. If `boot.asm` is newer but `nasm` isn't installed, `run` warns
+and simulates the committed `boot.hex` rather than failing:
+
+```
+warning: rom/boot.asm is newer than rom/boot.hex, but 'nasm' is
+         not installed -- simulating the committed rom/boot.hex as-is.
+```
+
+## Building and running
 
 The trace prints exactly three `[cycle NNN] ...` line types (everything
 else -- `useq_ptr` toggling, `m00_AXI` AR fetch activity, `iack` -- is
@@ -100,27 +166,6 @@ If you hit that, drop it:
 ```sh
 make run JOBS=3
 ```
-
-## Clock and timescale
-
-The core input clock is modelled at **33 MHz**. Verilator is invoked
-with `--timescale 1ns/1ps` (nothing in the RTL carries its own
-`` `timescale ``), so simulation time and every VCD timestamp are in
-picoseconds, and GTKWave shows a real time axis instead of the
-meaningless one you get from the 1ps/1ps default.
-
-33 MHz has a period of 30303.0303... ps, which is not a whole
-picosecond. `cpp/sim_main.cpp`'s `CLK_PERIOD_PS` rounds it to 30303 ps
--- a modelled 33.000033 MHz, ~1 ppm fast, far below anything this
-testbench measures. That rounding is never accumulated: clock-edge
-times are computed from the cycle index (`cycle * CLK_PERIOD_PS`) rather
-than by repeated addition, so a multi-million-cycle run cannot drift.
-
-`CLK_PERIOD_PS` and the Makefile's `--timescale` precision have to stay
-in agreement -- VCD dump timestamps are passed in timeprecision units.
-The run summary reports simulated wall-clock time (e.g. `simulated time
-: 30.303 us @ 33.000 MHz`), which is the quick way to confirm both are
-still lined up.
 
 ### On a remote machine over SSH (no rsync available)
 
@@ -180,6 +225,27 @@ grep -E '^\s*\$var' v586_tb.vcd | grep <signal_name>
 (the scope nesting shown by `$scope`/`$upscope` lines above a `$var`
 line gives the full dotted path, e.g.
 `TOP.v586_tb_top.u_dut.u_v586.ucore.i_useq.purge`).
+
+## Clock and timescale
+
+The core input clock is modelled at **33 MHz**. Verilator is invoked
+with `--timescale 1ns/1ps` (nothing in the RTL carries its own
+`` `timescale ``), so simulation time and every VCD timestamp are in
+picoseconds, and GTKWave shows a real time axis instead of the
+meaningless one you get from the 1ps/1ps default.
+
+33 MHz has a period of 30303.0303... ps, which is not a whole
+picosecond. `cpp/sim_main.cpp`'s `CLK_PERIOD_PS` rounds it to 30303 ps
+-- a modelled 33.000033 MHz, ~1 ppm fast, far below anything this
+testbench measures. That rounding is never accumulated: clock-edge
+times are computed from the cycle index (`cycle * CLK_PERIOD_PS`) rather
+than by repeated addition, so a multi-million-cycle run cannot drift.
+
+`CLK_PERIOD_PS` and the Makefile's `--timescale` precision have to stay
+in agreement -- VCD dump timestamps are passed in timeprecision units.
+The run summary reports simulated wall-clock time (e.g. `simulated time
+: 30.303 us @ 33.000 MHz`), which is the quick way to confirm both are
+still lined up.
 
 ## Boot image (`rom/boot.hex`)
 

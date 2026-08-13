@@ -4,8 +4,11 @@
 # -> core_rtl's v586) against a simulation-only AXI4 RAM/ROM/IO model, and
 # a C++ driver that runs a fixed cycle count and logs code-fetch activity.
 #
+#   make                - same as `make verilate` (first target, no `all`)
+#   make verilate       - build obj_dir/Vv586_tb_top and stop
 #   make run            - build (if needed) and run, no trace
 #   make run TRACE=1    - build and run with a VCD trace (sim/v586_tb.vcd)
+#   make run QUIET=1    - run summary only, suppress the per-event lines
 #   make run CYCLES=N   - override the cycle count (default 20000)
 #   make run IO_PORT=N  - log writes to a different I/O port (default 0x80)
 #   make waves          - run with TRACE=1 then open GTKWave on the result
@@ -13,7 +16,11 @@
 #                         re-running the sim (use this to re-open a trace
 #                         from a long run instead of paying for it again)
 #   make view VCD=other.vcd - open some other trace file
-#   make clean          - remove build output and traces
+#   make clean          - remove build output and traces (not rom/)
+#
+# `run` also re-assembles rom/boot.hex when rom/boot.asm is newer -- the
+# ROM is read by $readmemh at simulation start, so without that a stale
+# boot.hex would be simulated silently. See sim/README.md.
 #
 # The core clock is modelled at 33MHz -- see the --timescale flag below
 # and CLK_PERIOD_PS in cpp/sim_main.cpp, which have to stay in agreement.
@@ -30,6 +37,7 @@
 # drop to `make run JOBS=3` (known good here) or `JOBS=1` if it OOMs.
 
 VERILATOR ?= verilator
+NASM      ?= nasm
 
 CORE_RTL := ../core_rtl
 GATE_RTL := ../gate_rtl
@@ -63,6 +71,7 @@ BIN    := $(OBJDIR)/V$(TOP)
 
 CYCLES  ?= 20000
 TRACE   ?=
+QUIET   ?=
 IO_PORT ?= 0x80
 
 # Deliberately NOT nproc/all-cores: see the RAM warning in the header
@@ -81,6 +90,17 @@ RUN_ARGS := --cycles=$(CYCLES) --io-port=$(IO_PORT)
 ifeq ($(TRACE),1)
 RUN_ARGS += --trace=$(VCD)
 endif
+ifeq ($(QUIET),1)
+RUN_ARGS += --quiet
+endif
+
+# rom/boot.hex is read by $readmemh when the simulation starts, not when
+# the model is compiled, so it is a dependency of `run` rather than of
+# $(BIN). Without this, editing rom/boot.asm and re-running would
+# silently simulate the PREVIOUS ROM image -- which in an investigation
+# this file supports is a very expensive way to be wrong.
+ROM_SRC := rom/boot.asm
+ROM_HEX := rom/boot.hex
 
 # No source file carries a `timescale directive, so set the default here.
 # 1ps precision is what the 33MHz core clock needs: its period is
@@ -106,7 +126,21 @@ $(BIN): $(SIM_SRCS) cpp/sim_main.cpp
 		$(SIM_SRCS) cpp/sim_main.cpp \
 		-o V$(TOP)
 
-run: $(BIN)
+# boot.hex is committed, so a plain checkout can run without nasm; only
+# an actual edit to boot.asm triggers this, and if nasm is missing we
+# warn and simulate the committed image rather than failing the run.
+# Both branches must live in ONE recipe line: each line gets its own
+# shell, so an `|| exit 0` guard on a separate line would not stop the
+# assemble step below from running anyway.
+$(ROM_HEX): $(ROM_SRC)
+	@if command -v $(NASM) >/dev/null 2>&1; then \
+		$(MAKE) -C rom NASM=$(NASM); \
+	else \
+		echo "warning: $(ROM_SRC) is newer than $(ROM_HEX), but '$(NASM)' is"; \
+		echo "         not installed -- simulating the committed $(ROM_HEX) as-is."; \
+	fi
+
+run: $(BIN) $(ROM_HEX)
 	./$(BIN) $(RUN_ARGS)
 
 waves: TRACE := 1
