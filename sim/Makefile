@@ -11,6 +11,8 @@
 #   make run QUIET=1    - run summary only, suppress the per-event lines
 #   make run CYCLES=N   - override the cycle count (default 20000)
 #   make run IO_PORT=N  - log writes to a different I/O port (default 0x80)
+#   make test           - run the frozen ROM test suite (rom/tests/*.asm)
+#   make test TEST=name - run one test from that suite
 #   make waves          - run with TRACE=1 then open GTKWave on the result
 #   make view           - open an already-generated VCD in GTKWave, without
 #                         re-running the sim (use this to re-open a trace
@@ -25,16 +27,21 @@
 # The core clock is modelled at 33MHz -- see the --timescale flag below
 # and CLK_PERIOD_PS in cpp/sim_main.cpp, which have to stay in agreement.
 #
-# JOBS controls C++ build parallelism (default 4). The generated model
+# JOBS controls C++ build parallelism (default 2). The generated model
 # is large (v586's gate-level netlist is ~74k lines) and each parallel
 # g++ job on it can use well over 1GB of RAM, so this default is a RAM
 # ceiling, not a core count -- don't raise it to nproc without the RAM
 # to back it. Measured on the 8-core/5GB box this was developed on:
-# `-j 8` drove free memory to ~290MB with 8 cc1plus processes live and
-# got OOM-killed (`g++: fatal error: Killed signal terminated program
-# cc1plus` is the tell); `-j 3` completed in 3:04 with a 1.6GB peak RSS.
-# The default of 4 sits between those two and has NOT been measured --
-# drop to `make run JOBS=3` (known good here) or `JOBS=1` if it OOMs.
+#
+#   -j 8  OOM-killed; free memory hit ~290MB with 8 cc1plus live
+#   -j 4  OOM-killed
+#   -j 3  completed in 3:04, 1.6GB peak RSS (on an otherwise idle box)
+#   -j 2  current default
+#
+# `g++: fatal error: Killed signal terminated program cc1plus` is the
+# tell. Note -j 3 succeeded once with ~3.7GB free but is clearly close
+# to the edge, so the default sits one below it. Drop to JOBS=1 if even
+# this OOMs -- headroom depends on what else is running.
 
 VERILATOR ?= verilator
 NASM      ?= nasm
@@ -77,7 +84,7 @@ IO_PORT ?= 0x80
 # Deliberately NOT nproc/all-cores: see the RAM warning in the header
 # comment above. Raise it if you have RAM to spare, or drop to 1 if the
 # build still gets OOM-killed.
-JOBS    ?= 4
+JOBS    ?= 2
 
 # Trace file and the saved GTKWave signal layout applied to it. VCD is
 # overridable so `make view` can open a trace generated elsewhere (e.g.
@@ -114,7 +121,7 @@ VERILATOR_FLAGS := \
 	-Wno-MULTIDRIVEN -Wno-UNUSED -Wno-PINCONNECTEMPTY -Wno-IMPLICIT \
 	-Wno-INITIALDLY -Wno-BLKANDNBLK
 
-.PHONY: verilate run waves view clean
+.PHONY: verilate run test waves view clean
 
 verilate: $(BIN)
 
@@ -142,6 +149,14 @@ $(ROM_HEX): $(ROM_SRC)
 
 run: $(BIN) $(ROM_HEX)
 	./$(BIN) $(RUN_ARGS)
+
+# Run the frozen ROM test suite. Payloads are selected at runtime via the
+# +rom plusarg, so all tests share ONE compiled model -- adding a test
+# costs an assemble, not a re-elaboration. `make test TEST=<name>` runs a
+# single test. See run_tests.sh for the per-test directive format.
+test: $(BIN)
+	@$(MAKE) -C rom NASM=$(NASM)
+	@./run_tests.sh $(TEST)
 
 waves: TRACE := 1
 waves: run

@@ -29,10 +29,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "Vv586_tb_top.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
+
+// One expected (or forbidden) dbg_pc_out value, plus whether the run
+// actually hit it and when. Used for both --expect-pc and
+// --expect-not-pc; the two differ only in how `seen` is judged.
+struct Expect {
+	uint32_t addr;
+	bool     seen;
+	uint64_t first_cycle;
+	explicit Expect(uint32_t a) : addr(a), seen(false), first_cycle(0) {}
+};
 
 // Core input clock: 33 MHz. The Makefile builds with `--timescale
 // 1ns/1ps`, so simulation time (and every VCD dump timestamp, which is
@@ -60,6 +71,19 @@ int main(int argc, char **argv) {
 	std::string vcd_path = "v586_tb.vcd";
 	uint32_t io_watch_port = 0x80;
 
+	// Expectations. Any --expect-* flag puts the run in "test mode": the
+	// exit status becomes pass/fail rather than just "did it run", and a
+	// verdict block is printed. With no expectations given, behaviour is
+	// exactly as before (exploratory run, exit 0).
+	std::vector<Expect> expect_pc;      // pc_out must reach each of these
+	std::vector<Expect> expect_not_pc;  // ...and must never reach these
+	bool     have_expect_io  = false;
+	uint64_t expect_io       = 0;
+	bool     have_expect_ram = false;
+	uint64_t expect_ram      = 0;
+	bool     have_expect_wio = false;
+	uint64_t expect_wio      = 0;
+
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("--cycles=", 0) == 0) {
@@ -73,8 +97,32 @@ int main(int argc, char **argv) {
 			quiet = true;
 		} else if (arg.rfind("--io-port=", 0) == 0) {
 			io_watch_port = static_cast<uint32_t>(strtoul(arg.c_str() + 10, nullptr, 0));
+		} else if (arg.rfind("--expect-pc=", 0) == 0) {
+			expect_pc.push_back(Expect(
+				static_cast<uint32_t>(strtoul(arg.c_str() + 12, nullptr, 0))));
+		} else if (arg.rfind("--expect-not-pc=", 0) == 0) {
+			expect_not_pc.push_back(Expect(
+				static_cast<uint32_t>(strtoul(arg.c_str() + 16, nullptr, 0))));
+		} else if (arg.rfind("--expect-io=", 0) == 0) {
+			have_expect_io = true;
+			expect_io = strtoull(arg.c_str() + 12, nullptr, 0);
+		} else if (arg.rfind("--expect-ram=", 0) == 0) {
+			have_expect_ram = true;
+			expect_ram = strtoull(arg.c_str() + 13, nullptr, 0);
+		} else if (arg.rfind("--expect-writeio=", 0) == 0) {
+			have_expect_wio = true;
+			expect_wio = strtoull(arg.c_str() + 17, nullptr, 0);
+		} else if (arg.rfind("+", 0) == 0) {
+			// Verilator plusarg (e.g. +rom=...), consumed by
+			// Verilated::commandArgs above -- not ours to parse.
+		} else if (arg.rfind("--", 0) == 0) {
+			fprintf(stderr, "unknown option: %s\n", arg.c_str());
+			return 2;
 		}
 	}
+
+	const bool test_mode = !expect_pc.empty() || !expect_not_pc.empty() ||
+	                       have_expect_io || have_expect_ram || have_expect_wio;
 
 	Vv586_tb_top *top = new Vv586_tb_top;
 
@@ -97,11 +145,6 @@ int main(int argc, char **argv) {
 	uint32_t last_pc_out = 0xFFFFFFFF;
 	uint64_t last_pc_out_change_cycle = 0;
 	uint64_t pc_out_changes = 0;
-	bool pc_out_hit_ffc00 = false;
-	bool pc_out_hit_fffF0 = false;
-	bool pc_out_hit_f00000 = false;
-	uint64_t pc_out_ffc00_first_cycle = 0;
-	uint64_t pc_out_f00000_first_cycle = 0;
 
 	uint8_t last_useq_ptr = 0xFF;
 
@@ -156,14 +199,17 @@ int main(int argc, char **argv) {
 			last_pc_out = top->mon_pc_out;
 			last_pc_out_change_cycle = cycle;
 			pc_out_changes++;
-			if (last_pc_out == 0x000FFC00) {
-				if (!pc_out_hit_ffc00) pc_out_ffc00_first_cycle = cycle;
-				pc_out_hit_ffc00 = true;
+			for (size_t e = 0; e < expect_pc.size(); e++) {
+				if (!expect_pc[e].seen && expect_pc[e].addr == last_pc_out) {
+					expect_pc[e].seen = true;
+					expect_pc[e].first_cycle = cycle;
+				}
 			}
-			if (last_pc_out == 0x000FFFF0) pc_out_hit_fffF0 = true;
-			if (last_pc_out == 0x00F00000) {
-				if (!pc_out_hit_f00000) pc_out_f00000_first_cycle = cycle;
-				pc_out_hit_f00000 = true;
+			for (size_t e = 0; e < expect_not_pc.size(); e++) {
+				if (!expect_not_pc[e].seen && expect_not_pc[e].addr == last_pc_out) {
+					expect_not_pc[e].seen = true;
+					expect_not_pc[e].first_cycle = cycle;
+				}
 			}
 		}
 
@@ -231,34 +277,59 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	printf("\n---- reset-vector / long-jump-trap disambiguation ----\n");
-	printf("dbg_pc_out ever == 0xFFFF0   (confirmed reset vector) : %s\n",
-	       pc_out_hit_fffF0 ? "yes" : "no");
-	printf("dbg_pc_out ever == 0xFFC00   (trap address)           : %s\n",
-	       pc_out_hit_ffc00 ? "yes" : "no");
-	printf("dbg_pc_out ever == 0xF00000  (long-jump target)       : %s\n",
-	       pc_out_hit_f00000 ? "yes" : "no");
-
-	if (pc_out_hit_f00000) {
-		printf("  first reached at cycle %llu\n",
-		       static_cast<unsigned long long>(pc_out_f00000_first_cycle));
-		printf("RESULT: dbg_pc_out reached 0x00F00000 -- a deliberately unmapped, otherwise\n"
-		       "unreachable address. This is unambiguous confirmation that real execution hit\n"
-		       "the trap at 0xFFC00 and executed the long jump (not fetch-bus/prefetch\n"
-		       "traffic -- nothing else in this design could produce this exact PC value).\n");
-	} else if (pc_out_hit_ffc00) {
-		printf("  0xFFC00 first reached at cycle %llu, but never jumped to 0xF00000\n",
-		       static_cast<unsigned long long>(pc_out_ffc00_first_cycle));
-		printf("RESULT: dbg_pc_out reached 0xFFC00 but the long jump never fired -- the 6-byte\n"
-		       "'66 E9' encoding may not be decoded as expected by this core (e.g. no 0x66\n"
-		       "operand-size prefix support, or a different opcode-length assumption than\n"
-		       "used here). Inspect the trace around cycle %llu byte-by-byte.\n",
-		       static_cast<unsigned long long>(pc_out_ffc00_first_cycle));
-	} else {
-		printf("RESULT: dbg_pc_out never reached 0xFFC00 at all -- last value 0x%08x.\n",
-		       last_pc_out);
+	// No --expect-* flags: exploratory run, nothing to judge.
+	if (!test_mode) {
+		delete top;
+		return 0;
 	}
 
+	// ---- Expectations -------------------------------------------------
+	// Each line prints its own pass/fail so a failing test says exactly
+	// which assertion broke, rather than just a non-zero exit status.
+	int failures = 0;
+	printf("\n---- expectations ----\n");
+
+	for (size_t e = 0; e < expect_pc.size(); e++) {
+		const bool ok = expect_pc[e].seen;
+		if (!ok) failures++;
+		printf("[%s] pc_out reaches 0x%08x", ok ? "PASS" : "FAIL", expect_pc[e].addr);
+		if (ok) printf(" (first at cycle %llu)",
+		               static_cast<unsigned long long>(expect_pc[e].first_cycle));
+		printf("\n");
+	}
+	for (size_t e = 0; e < expect_not_pc.size(); e++) {
+		const bool ok = !expect_not_pc[e].seen;
+		if (!ok) failures++;
+		printf("[%s] pc_out never reaches 0x%08x", ok ? "PASS" : "FAIL",
+		       expect_not_pc[e].addr);
+		if (!ok) printf(" (but hit it at cycle %llu)",
+		                static_cast<unsigned long long>(expect_not_pc[e].first_cycle));
+		printf("\n");
+	}
+	if (have_expect_io) {
+		const bool ok = (io_watch_port_writes == expect_io);
+		if (!ok) failures++;
+		printf("[%s] IO writes to port 0x%02x == %llu (got %llu)\n",
+		       ok ? "PASS" : "FAIL", io_watch_port,
+		       static_cast<unsigned long long>(expect_io),
+		       static_cast<unsigned long long>(io_watch_port_writes));
+	}
+	if (have_expect_ram) {
+		const bool ok = (ram_writes == expect_ram);
+		if (!ok) failures++;
+		printf("[%s] RAM writes == %llu (got %llu)\n", ok ? "PASS" : "FAIL",
+		       static_cast<unsigned long long>(expect_ram),
+		       static_cast<unsigned long long>(ram_writes));
+	}
+	if (have_expect_wio) {
+		const bool ok = (writeio_req_pulses == expect_wio);
+		if (!ok) failures++;
+		printf("[%s] writeio_req pulses == %llu (got %llu)\n", ok ? "PASS" : "FAIL",
+		       static_cast<unsigned long long>(expect_wio),
+		       static_cast<unsigned long long>(writeio_req_pulses));
+	}
+
+	printf("RESULT: %s (%d failed)\n", failures ? "FAIL" : "PASS", failures);
 	delete top;
-	return 0;
+	return failures ? 1 : 0;
 }

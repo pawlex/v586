@@ -248,6 +248,34 @@ Summary of where this stands (full detail and running log of evidence in
   `sim/README.md`'s "Clock and timescale". Real 586-class hardware would
   have finished POST-ing in that window.)
 
+- **Findings frozen as an executable test suite** (`sim/rom/tests/`, run
+  with `make test` -- see `sim/README.md`). The ROM image is now selected
+  at runtime via a `+rom=` plusarg, so any number of test payloads share
+  one compiled model instead of costing a re-elaboration each. Two tests
+  so far, deliberately one of each kind:
+  - `cs_ip_encoding` (**passes**) -- a far jump to `0x000E:0x1234` from
+    the reset vector. This is a **5th independent confirmation** of the
+    `CS<<16|IP` finding, and the first with a segment/offset pair not
+    used before: it landed at `0x000E1234` exactly, where real-mode
+    segment math predicts `0x0000F314`. The target was chosen so the two
+    models disagree *and* so the landing address differs from where
+    execution started -- a jump back to `0xFFC00` would have "passed"
+    merely by being the reset vector.
+  - `io_marker_retires` (**XFAIL**) -- `mov ax,0xc00c` / `out 0x80,ax` at
+    the reset vector. Its assertions isolate the open question cleanly:
+    `pc_out reaches 0xFFC00` **passes** (the program really is reached)
+    while `IO writes == 1` and `writeio_req pulses == 1` both **fail**
+    (got 0). Same result as every previous probe, but now as a standing
+    regression rather than a one-off run. If this test ever flips to
+    passing, the suite reports it as a loud XPASS -- that is the signal
+    to watch for.
+
+  Also removed a stale hardcoded verdict block from `sim_main.cpp` that
+  had been printing a conclusion about the old `66 E9` disambiguation
+  trap on *every* run, long after `boot.asm` stopped containing any such
+  instruction. Expectations are now per-test flags instead of baked-in
+  assumptions.
+
 ### TODO / next steps
 
 1. **Find `vliw`'s actual decode-to-execute dispatch signals** (what

@@ -78,6 +78,18 @@ module axi_sim_mem #(
 	reg [7:0] rom [0:ROM_BYTES-1];
 
 	integer init_i;
+
+	// ROM image path. $readmemh runs at simulation start (not at compile
+	// time), so the image is a RUNTIME input -- which is what lets a
+	// +rom=<path> plusarg select a different payload against one compiled
+	// model. Without this, pointing the testbench at another ROM would
+	// mean changing the ROM_FILE parameter and re-elaborating the whole
+	// ~74k-line netlist (minutes) for every test case.
+	//
+	// The ROM_FILE parameter remains the default, so a plain `make run`
+	// and any instantiation that doesn't pass +rom behave exactly as
+	// before.
+	reg [8*256-1:0] rom_file_plusarg;
 	initial begin
 		for (init_i = 0; init_i < RAM_BYTES; init_i = init_i + 1) ram[init_i] = 8'h00;
 		// Default-fill the ROM with NOP (0x90) rather than 0x00 -- a flat
@@ -86,7 +98,10 @@ module axi_sim_mem #(
 		// ("ADD [bx+si], al", a real memory-touching instruction).
 		// boot.hex below overrides the specific bytes that matter.
 		for (init_i = 0; init_i < ROM_BYTES; init_i = init_i + 1) rom[init_i] = 8'h90;
-		$readmemh(ROM_FILE, rom);
+		if ($value$plusargs("rom=%s", rom_file_plusarg))
+			$readmemh(rom_file_plusarg, rom);
+		else
+			$readmemh(ROM_FILE, rom);
 	end
 
 	// ---------------------------------------------------------------

@@ -48,6 +48,7 @@ when `boot.asm` changes.
 |------------|-----------------------------------------------------------------------|
 | `verilate` | Build `obj_dir/Vv586_tb_top` and stop. **This is what bare `make` does** -- there's no `all` target, and `verilate` is first. |
 | `run`      | Build if needed, re-assemble the ROM if `rom/boot.asm` changed, then run. |
+| `test`     | Run the frozen ROM test suite (`rom/tests/*.asm`). `make test TEST=<name>` runs one. |
 | `waves`    | `run` with `TRACE=1`, then open the result in GTKWave.                  |
 | `view`     | Open an **existing** VCD in GTKWave without re-running the sim.        |
 | `clean`    | Remove `obj_dir/` and the VCD. Leaves `rom/` alone.                    |
@@ -100,7 +101,75 @@ Variables (all overridable on the command line, e.g. `make run CYCLES=1000`):
 Restore it with `make -C rom` if you have `nasm`, or
 `git checkout sim/rom/boot.hex` if you don't.
 
-### How the two fit together
+## Test suite
+
+`make test` runs the frozen ROM suite in [`rom/tests/`](rom/tests). Each
+test is one self-describing `.asm`: the program and the expectations
+about it live in the same file, so there's no manifest to keep in sync.
+
+```
+PASS   cs_ip_encoding         [fetch] far jump target uses CS<<16|IP, not real-mode CS*16+IP
+XFAIL  io_marker_retires      [retire] out 0x80,ax at the reset vector produces a real IO write
+```
+
+All tests share **one compiled model**. The ROM is selected at runtime
+via a `+rom=<path>` plusarg (see `axi_sim_mem.v`), so adding a test costs
+an assemble, not a ~3-minute re-elaboration. You can drive it by hand
+too:
+
+```sh
+./obj_dir/Vv586_tb_top +rom=rom/tests/cs_ip_encoding.hex --cycles=400 \
+    --expect-pc=0x000E1234 --expect-not-pc=0x0000F314
+```
+
+### `fetch` vs `retire` -- the distinction that matters
+
+Every test declares a `CLASS`, and it is the most important field in the
+file:
+
+- **`fetch`** asserts where the fetch/PC pointer goes. These pass today.
+- **`retire`** asserts that an instruction produced a real bus side
+  effect (an IO write, a RAM store, a `writeio_req` pulse). These are
+  marked `XFAIL` -- they encode the central open question from
+  [`../core_rtl/README.md`](../core_rtl/README.md), not a regression.
+
+Conflating the two is the single most expensive mistake made in this
+investigation: `pc_out` advancing correctly past an instruction is **not**
+evidence that it executed. Keep a test's assertions consistent with its
+class, and never "fix" a red `retire` test by weakening it into a `fetch`
+assertion -- that would delete the finding.
+
+An `XFAIL` that starts passing is reported as **XPASS** and fails the
+suite deliberately, with a banner. That is the signal the retirement
+investigation is waiting for, and it must not scroll past unnoticed.
+
+### Adding a test
+
+Drop a `.asm` in `rom/tests/` -- the build and runner pick it up with no
+other edits. Directives are read from the leading comment block:
+
+| Directive        | Meaning                                             |
+|------------------|-----------------------------------------------------|
+| `CLASS:`         | `fetch` or `retire` (see above).                    |
+| `DESC:`          | One-line description shown in the results.          |
+| `CYCLES:`        | How long to run (default 20000).                    |
+| `XFAIL:`         | `yes` -- expected to fail today.                    |
+| `EXPECT-PC:`     | `pc_out` must reach this address. Repeatable.       |
+| `EXPECT-NOT-PC:` | `pc_out` must never reach it. Repeatable.           |
+| `EXPECT-IO:`     | Exact count of IO writes to the watched port.       |
+| `EXPECT-RAM:`    | Exact count of RAM writes.                          |
+| `EXPECT-WRITEIO:`| Exact count of `writeio_req` pulses.                |
+
+A test with no `EXPECT-*` directives is reported as an `ERROR`, not a
+pass -- an assertion-free test would otherwise always succeed.
+
+Make the assertion *discriminating*: pick expectations that only hold if
+the behaviour under test is real. `cs_ip_encoding` targets
+`0x000E:0x1234` rather than the reset vector precisely because a jump
+landing back on `0xFFC00` would "pass" just by being where execution
+already was.
+
+### How the two makefiles fit together
 
 `rom/boot.hex` is read by `$readmemh` when the **simulation starts**,
 not when the model is compiled -- so it's a prerequisite of `run`, not
@@ -148,23 +217,32 @@ trace point" below to add your own.
 sources, then runs it. Rebuilds happen automatically when any source file
 changes (standard Make dependency tracking).
 
-`JOBS` controls C++ build parallelism. The generated model is large (the
-gate-level netlist is ~74k lines) and each parallel `g++` job can use
-well over 1GB of RAM, so treat this as a **RAM ceiling, not a core
-count** -- don't raise it to `nproc` without the memory to back it.
-Measured on the 8-core/5GB machine this was developed on, `-j 8` drove
-free memory to ~290MB with 8 `cc1plus` processes live and got
-OOM-killed; **`-j 3` is the tested-working value and the recommended
-one** (3:04 wall, 1.6GB peak RSS). The tell is:
+`JOBS` controls C++ build parallelism (default 2). The generated model
+is large (the gate-level netlist is ~74k lines) and each parallel `g++`
+job can use well over 1GB of RAM, so treat this as a **RAM ceiling, not
+a core count** -- don't raise it to `nproc` without the memory to back
+it. Measured on the 8-core/5GB machine this was developed on:
+
+| `-j` | Result                                                     |
+|------|------------------------------------------------------------|
+| 8    | OOM-killed -- free memory hit ~290MB with 8 `cc1plus` live |
+| 4    | OOM-killed                                                 |
+| 3    | Completed in 3:04, 1.6GB peak RSS, on an otherwise idle box |
+| 2    | Current default                                            |
+
+The tell is:
 
 ```
 g++: fatal error: Killed signal terminated program cc1plus
 ```
 
-If you hit that, drop it:
+`-j 3` did complete once, but only with ~3.7GB free and nothing else
+running -- it's close enough to the edge that the default sits one
+below. How much headroom you have depends on what else is on the
+machine; drop further if needed:
 
 ```sh
-make run JOBS=3
+make run JOBS=1
 ```
 
 ### On a remote machine over SSH (no rsync available)
