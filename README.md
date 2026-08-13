@@ -158,3 +158,98 @@ make run           # exploratory run
 
 See [`sim/README.md`](sim/README.md) for the testbench, the ROM build
 flow, and how to add test payloads.
+
+## Last-gasp: is there any use case for this core?
+
+DOS is out (above). But the core *does* execute, and it was already in
+hand — so before abandoning it, it was evaluated for a different job:
+**a chipset validation test bed**, driving a 386SX/486 local bus on an
+FPGA board to exercise memory, I/O and peripheral logic. That role needs
+correct loads, stores and bus cycles, but *not* x86 fidelity — so the
+missing segmentation would not have disqualified it.
+
+Three questions: size, performance, and function. It wins the first two
+and still loses.
+
+### Size and performance
+
+Synthesised and placed with the fully open-source flow — **yosys 0.68 +
+nextpnr-ecp5** from OSS CAD Suite, no vendor tools. Target **LFE5U-85F**,
+CABGA381, speed grade 7, `--out-of-context` (the core's own placement and
+timing, without inventing a pinout it would never have).
+
+| core | LUT4 packed | % of 85F | DFF | BRAM | Fmax |
+|---|---:|---:|---:|---:|---:|
+| PicoRV32 | 1,782 | 2.1% | 573 | 0 | 111.30 MHz |
+| VexRiscv Lite | 3,000 | 3.6% | 1,090 | 4 | 102.01 MHz |
+| VexRiscv Debug | 3,595 | 4.3% | 1,638 | 10 | 99.06 MHz |
+| **v586** | **28,846** | **34%** | 4,737 | 36 | **44.72 MHz** |
+| ao486 | 37,895 | 45% | 6,584 | 12 | 32.87 MHz |
+
+Against ao486, v586 is **24% smaller and 36% faster**. It packs far more
+efficiently too (+4.4% from synthesis to placement, versus ao486's
++19.8%): it has few carry cells and **zero** distributed-RAM LUTs,
+putting its arrays in BRAM instead, while ao486's async-read `altdpram`
+cannot map to ECP5's sync-read EBR and is charged against the LUT budget.
+
+None of which matters, because the comparison that decides the role is
+the other one: for a job that only needs to drive bus cycles, a RISC-V
+does it in **2-4% of the device at 2-3x the clock**. v586 is **8x** the
+size of VexRiscv Debug and less than half its Fmax — while offering no
+x86 fidelity to justify the difference, and no debug infrastructure
+(below) to offset it.
+
+Timing headroom compounds the gap. The RISC-V options sit near 100 MHz
+against a bus needing ~33, so they stay closed as the device fills with
+chipset logic. On a shared FPGA, tester choice also decides what is left
+for the instrumentation that justifies FPGA-based validation in the first
+place: ~80k LUT4 with a small core, ~46k with ao486.
+
+### No FPU
+
+"586" implies an integrated FPU, and both cores used exactly 4
+`MULT18X18D` — a hint that neither has an 80-bit FP datapath. Tested
+directly rather than inferred:
+
+| addr | instruction | PC advance | effect |
+|---|---|---|---|
+| `0xFFC0B` | `FNINIT` (`DB E3`) | +2, correct | none observed |
+| `0xFFC13` | `FLD1` (`D9 E8`) | +2, correct | none observed |
+| `0xFFC1B` | `FSTP qword [0x1000]` (`DD 1D ...`) | +6, correct | **no RAM write** |
+
+All three are length-decoded correctly, and the store produced nothing on
+a core where stores demonstrably work. Immediately afterwards the decoder
+**desyncs**, stepping through the following `MOV`'s immediate bytes one at
+a time (`0xFFC21 -> 0xFFC23 -> 0xFFC24 -> 0xFFC25 ...`) instead of
+advancing 5 bytes.
+
+There is no evidence of an FPU, and x87 opcodes leave the pipeline
+broken. Note the trap: `pc_out` advanced by exactly the right 6 bytes
+across `FSTP`. Length-correct PC advancement is *not* execution — the
+same confusion that cost this investigation months.
+
+### No debug infrastructure
+
+There is no TAP. Zero occurrences of `tck`, `tms`, `tdi`, `tdo`, `trst`,
+`jtag`, `scan_en`, `test_mode`, `ice_` or `probe_` anywhere in
+`core_rtl/`. The only native debug port, `debug[4:0]`, appears **twice in
+the entire core** — in the port list and its declaration — and is
+assigned nowhere. It is a dangling output, the same defect class as
+`m01_AXI_BREADY`, which is why every run reports `final debug[4:0] : 0x0`.
+
+Every bit of observability used in this investigation — `dbg_pc_out`,
+`dbg_useq_ptr`, `dbg_writeio_*` — was added here by hand-threading ports
+through the hierarchy. For a bring-up vehicle that is the wrong starting
+point: VexRiscv's debug plugin gives JTAG and GDB attach for 4.3% of the
+device.
+
+### Verdict
+
+No use case found. For x86-faithful work, ao486 behaves correctly and
+v586 does not. For driving a bus, a RISC-V is an order of magnitude
+smaller, twice as fast, and arrives with a debugger. v586 is smaller and
+faster than a core that works, which is not a trade.
+
+The exercise was not wasted: it validated the open-source ECP5 flow
+end-to-end on real designs, and produced the utilization and timing
+numbers the board budget is now built on.
